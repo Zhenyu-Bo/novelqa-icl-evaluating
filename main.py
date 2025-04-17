@@ -1,9 +1,33 @@
+"""
+使用示例：
+python main.py --model gemini --base_dir ./data/NovelQA --output ./results --use_content True --title_only False
+"""
+
 from src.loader import BookLoader, QuestionLoader, BookMetaDataLoader
 from src.llm import LLM, get_llm
 from src.path_builder import NovelQAPathBuilder
 from src.extractor import extract_entries, extract_entries_no_evidence, merge
 from src.utils import save_json
 import os
+import argparse
+
+parser = argparse.ArgumentParser(description="Parse command line arguments.")
+parser.add_argument('--model', type=str, required=True, help="Specify the model name.")
+parser.add_argument('--base_dir', type=str, required=True, help="Specify the base directory name.")
+parser.add_argument('--output', type=str, required=True, help="Specify the output directory name.")
+parser.add_argument('--use_content', type=bool, required=False, default=False, help="Specify whether to use content or not.")
+parser.add_argument('--title_only', type=bool, required=False, default=True, help="Specify whether to use title only or not.")
+
+args = parser.parse_args()
+model_name = args.model
+assert model_name in ['gemini', 'deepseek']
+base_dir = args.base_dir
+output_dir = args.output
+use_content = args.use_content
+title_only = args.title_only
+
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
 
 def build_prompt_icl(book_content: str, question_options: str) -> str:
     """创建提示词
@@ -23,14 +47,10 @@ BOOK_IDS.remove("B30")
 BOOK_IDS.remove("B45")
 BOOK_IDS.remove("B48") # 内容太长，予以舍弃
 
-OUTPUT_DIR = "results"
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-
-def test(book_id: str, llm: LLM, use_content: bool = True) -> dict:
+def test(book_id: str, llm: LLM) -> dict:
     """对一本书进行测试"""
     # 构造路径
-    path_builder = NovelQAPathBuilder('./data/NovelQA')
+    path_builder = NovelQAPathBuilder(base_dir)
     book_path = path_builder.get_book_path(book_id)
     question_path = path_builder.get_question_path(book_id)
     # 加载数据
@@ -58,13 +78,15 @@ def test(book_id: str, llm: LLM, use_content: bool = True) -> dict:
         if use_content:
             prompt = build_prompt_icl(book_content, questions)
         else:
-            # prompt = build_zero_shot_prompt(discription, questions)
-            prompt = build_zero_shot_only_title(title, questions)
-        with open(f"{OUTPUT_DIR}/prompts/{book_id}.txt", 'w', encoding='utf-8') as file:
+            if title_only:
+                prompt = build_zero_shot_only_title(title, questions)
+            else:
+                prompt = build_zero_shot_prompt(discription, questions)
+        with open(f"{output_dir}/prompts/{book_id}.txt", 'w', encoding='utf-8') as file:
             file.write(prompt)
         # 调用模型
         response = llm.generate(prompt)
-        with open(f"{OUTPUT_DIR}/responses/{book_id}.txt", 'w', encoding='utf-8') as file:
+        with open(f"{output_dir}/responses/{book_id}.txt", 'w', encoding='utf-8') as file:
             file.write(response)
         # 解析输出
         if use_content:
@@ -76,9 +98,8 @@ def test(book_id: str, llm: LLM, use_content: bool = True) -> dict:
     return question_dict
 
 if __name__ == "__main__":
-    llm: LLM = get_llm("gemini")
-    # llm: LLM = get_llm("deepseek")
+    llm: LLM = get_llm(model_name)
     llm = None
     for book_id in BOOK_IDS:
-        result = test(book_id, llm, False)
-        save_json(result, f"{OUTPUT_DIR}/{book_id}.json")
+        result = test(book_id, llm)
+        save_json(result, f"{output_dir}/{book_id}.json")
