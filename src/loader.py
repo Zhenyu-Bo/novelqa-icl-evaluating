@@ -27,6 +27,36 @@ class BookLoader:
     
     def get_id(self) -> str:
         return self.book_id
+    
+class BookMetaDataLoader:
+    def __init__(self, meta_data_path: str):
+        self.meta_data_path = meta_data_path
+        self.meta_data = None
+
+    def load(self):
+        with open(self.meta_data_path, 'r') as file:
+            self.meta_data = json.load(file)
+
+    def build_description(self, book_id) -> str:
+        return f"{self.meta_data[book_id]['title']} by {self.meta_data[book_id]['author']}, published in {self.meta_data[book_id]['yearpub']}. The book is in the {self.meta_data[book_id]['period']} period."
+
+    def get_meta_data(self, book_id) -> dict:
+        return self.meta_data[book_id]
+    
+    def get_title(self, book_id) -> str:
+        return self.meta_data[book_id]['title']
+
+    def get_author(self, book_id) -> str:
+        return self.meta_data[book_id]['author']
+    
+    def get_yearpub(self, book_id) -> int:
+        return self.meta_data[book_id]['yearpub']
+
+    def get_period(self, book_id) -> str:
+        return self.meta_data[book_id]['period']
+    
+    def is_public_domain(self, book_id) -> bool:
+        return self.meta_data[book_id]['copyright'] == 'Public Domain' 
 
 class QuestionLoader:
     def __init__(self, question_path: str, book_id: str):

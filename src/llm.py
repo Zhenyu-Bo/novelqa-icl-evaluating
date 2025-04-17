@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from google import genai
 from google.genai import types
+import openai
 import os
 
 class LLM(ABC):
@@ -28,6 +29,23 @@ class Gemini2Flash(LLM):
             contents=[prompt]
         )
         return response.text
+    
+class Deepseek(LLM):
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.system_prompt = ""
+        self.client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+
+    def generate(self, prompt: str) -> str:
+        response = self.client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            stream=False
+        )
+        return response.choices[0].message.content
 
 def get_llm(llm_name: str, api_key: str | None = None) -> LLM:
     if llm_name == "gemini":
@@ -36,5 +54,11 @@ def get_llm(llm_name: str, api_key: str | None = None) -> LLM:
             if api_key is None:
                 raise ValueError("GEMINI_API_KEY is not set")
         return Gemini2Flash(api_key)
+    elif llm_name == "deepseek":
+        if api_key is None:
+            api_key = os.getenv("DEEPSEEK_API_KEY")
+            if api_key is None:
+                raise ValueError("DEEPSEEK_API_KEY is not set")
+        return Deepseek(api_key)
     else:
         raise ValueError(f"Unknown LLM: {llm_name}")

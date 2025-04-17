@@ -21,3 +21,6 @@ class NovelQAPathBuilder:
         if book_id == 'B30':
             return self.__check_path_exists(f"{self.base_dir}/Demonstration/{book_id}.json")
         return self.__check_path_exists(f"{self.base_dir}/Data/PublicDomain/{book_id}.json")
+    
+    def get_meta_data_path(self) -> str:
+        return self.__check_path_exists(f"{self.base_dir}/bookmeta.json")
