@@ -1,6 +1,6 @@
 import json
 import argparse
-from src.extractor import extract_entries, merge
+from src.extractor import extract_entries, extract_entries_no_evidence, merge
 from src.loader import QuestionLoader
 from src.path_builder import NovelQAPathBuilder
 
@@ -10,11 +10,11 @@ parser.add_argument('book_id', type=str, help='The book ID to process')
 args = parser.parse_args()
 
 # 示例文件路径，替换为实际路径
-input_file = 'temp.txt'
+input_file = f'./results/responses/{args.book_id}.txt'
 
 with open(input_file, 'r') as f:
     content = f.read()
-    entries = extract_entries(content)
+    entries = extract_entries_no_evidence(content)
 
 path_builder = NovelQAPathBuilder('./data/NovelQA')
 book_id = args.book_id

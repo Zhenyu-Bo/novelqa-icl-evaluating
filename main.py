@@ -12,7 +12,10 @@ def build_prompt_icl(book_content: str, question_options: str) -> str:
     return f"""You are a literature professor. I will provide you with the full text of a novel along with a series of questions. Please thoroughly analyze the novel's content to accurately respond to each of the following questions.\nBook Content:{book_content};\nBook ends. Questions start here:\n{question_options}\nQuestions end here. Try your best to answer the questions based on the given full text of the novel. The answer should be the analysis of text content around the question, and then the best option, and then the evidence from the novel. The analysis should be detailed and based on the document, and the evidence should be short and brief. Your output format should be <First Question ID>: \n<analysis of text content around the question>\nAnswer: <best option>\n<evidences>\n\n<Second Question ID>:\n<analysis of text content around the question>\nAnswer: <best option> ... <nth Question ID>: (, each answer in one line with all the supporting evidences. Each evidence should be a sentence exactly from the original text without any paraphrase. for example, the output may be like this:\nQ0001:\nBased on the document and the question,...\nAnswer: A\nThe first evidence\nThe second evidence\n...\nQ0002:\nBased on the document and the question,...\nAnswer: B\nThe first evidence\nThe second evidence\n...\nQ000n:\nBase on the document and the question,...\nAnswer: C\nThe first evidence\nThe second evidence\n...\n\n"""
 
 def build_zero_shot_prompt(book_discription: str, question_options: str) -> str:
-    return f"""You are a literature professor. I will provide you a series of questions along with four choices for each question. Please accurately select the correct choice to each of the following questions. All the questions are related to a book and can be answered by the book content. Here is the discription of the book:\n{book_discription}\nDescription ends here.\nQuestions start here:\n{question_options}\nQuestions end here.\nTry your best to answer the questions based on your own knowledge. You should first analyze the question and the book and then give your choise. Your should output the choice to each question with the format Your output format should be <First Question ID>: \n<analysis of text content around the question>\nAnswer: <best option>\n\n<Second Question ID>:\n<analysis of text content around the question>\nAnswer: <best option> ... <nth Question ID>:...\nFor example, the output may be like this:\nQ0001:\nBased on the document and the question,...\nAnswer: A\n\nQ0002:\nBased on the document and the question,...\nAnswer: B\n\nQ000n:\nBase on the document and the question,...\nAnswer: C\n\nOne more thing, don't use the markdown output format.""" 
+    return f"""You are a literature professor. I will provide you a series of questions along with four choices for each question. Please accurately select the correct choice to each of the following questions. All the questions are related to a book and can be answered by the book content. Here is the discription of the book:\n{book_discription}\nDescription ends here.\nQuestions start here:\n{question_options}\nQuestions end here.\nTry your best to answer the questions based on your own knowledge. You should first analyze the question and the book and then give your choise. Your should output the choice to each question with the format Your output format should be <First Question ID>: \n<analysis of text content around the question>\nAnswer: <best option>\n\n<Second Question ID>:\n<analysis of text content around the question>\nAnswer: <best option> ... <nth Question ID>:...\nFor example, the output may be like this:\nQ0001:\nBased on the document and the question,...\nAnswer: A\n\nQ0002:\nBased on the document and the question,...\nAnswer: B\n\nQ000n:\nBase on the document and the question,...\nAnswer: C\n\nOne more thing, don't use the markdown output format."""
+
+def build_zero_shot_only_title(book_title: str, question_options: str) -> str:
+    return f"""You are a literature professor. I will provide you a series of questions along with four choices for each question. Please accurately select the correct choice to each of the following questions. All the questions are related to a book and can be answered by the book content. The title of the book is: {book_title}\nQuestions start here:\n{question_options}\nQuestions end here.\nTry your best to answer the questions based on your own knowledge. You should first analyze the question and the book and then give your choise. Your should output the choice to each question with the format Your output format should be <First Question ID>: \n<analysis of text content around the question>\nAnswer: <best option>\n\n<Second Question ID>:\n<analysis of text content around the question>\nAnswer: <best option> ... <nth Question ID>:...\nFor example, the output may be like this:\nQ0001:\nBased on the document and the question,...\nAnswer: A\n\nQ0002:\nBased on the document and the question,...\nAnswer: B\n\nQ000n:\nBase on the document and the question,...\nAnswer: C\n\nOne more thing, don't use the markdown output format."""
 
 BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
 BOOK_IDS.remove("B06")
@@ -41,6 +44,7 @@ def test(book_id: str, llm: LLM, use_content: bool = True) -> dict:
         meta_data_loader = BookMetaDataLoader(path_builder.get_meta_data_path())
         meta_data_loader.load()
         discription = meta_data_loader.build_description(book_id)
+        title = meta_data_loader.get_title(book_id)
     question_dict = dict(question_loader.get_whole())
     question_iter = 0
     while question_iter < len(question_loader):
@@ -54,10 +58,10 @@ def test(book_id: str, llm: LLM, use_content: bool = True) -> dict:
         if use_content:
             prompt = build_prompt_icl(book_content, questions)
         else:
-            prompt = build_zero_shot_prompt(discription, questions)
+            # prompt = build_zero_shot_prompt(discription, questions)
+            prompt = build_zero_shot_only_title(title, questions)
         with open(f"{OUTPUT_DIR}/prompts/{book_id}.txt", 'w', encoding='utf-8') as file:
             file.write(prompt)
-        # continue
         # 调用模型
         response = llm.generate(prompt)
         with open(f"{OUTPUT_DIR}/responses/{book_id}.txt", 'w', encoding='utf-8') as file:
@@ -72,9 +76,9 @@ def test(book_id: str, llm: LLM, use_content: bool = True) -> dict:
     return question_dict
 
 if __name__ == "__main__":
-    # llm: LLM = get_llm("gemini")
-    llm: LLM = get_llm("deepseek")
-    # llm = None
+    llm: LLM = get_llm("gemini")
+    # llm: LLM = get_llm("deepseek")
+    llm = None
     for book_id in BOOK_IDS:
         result = test(book_id, llm, False)
         save_json(result, f"{OUTPUT_DIR}/{book_id}.json")
