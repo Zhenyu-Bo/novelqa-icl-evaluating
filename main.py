@@ -15,19 +15,23 @@ parser = argparse.ArgumentParser(description="Parse command line arguments.")
 parser.add_argument('--model', type=str, required=True, help="Specify the model name.")
 parser.add_argument('--base_dir', type=str, required=True, help="Specify the base directory name.")
 parser.add_argument('--output', type=str, required=True, help="Specify the output directory name.")
-parser.add_argument('--use_content', type=bool, required=False, default=False, help="Specify whether to use content or not.")
-parser.add_argument('--title_only', type=bool, required=False, default=True, help="Specify whether to use title only or not.")
+parser.add_argument('--use_content', type=str, required=False, default=False, help="Specify whether to use content or not.")
+parser.add_argument('--title_only', type=str, required=False, default=True, help="Specify whether to use title only or not.")
 
 args = parser.parse_args()
 model_name = args.model
-assert model_name in ['gemini', 'deepseek']
+assert model_name in ['gemini', 'deepseek', 'deepseek-r1']
 base_dir = args.base_dir
 output_dir = args.output
-use_content = args.use_content
-title_only = args.title_only
+use_content = args.use_content.lower() == 'true'
+title_only = args.title_only.lower() == 'true'
 
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
+if not os.path.exists(f'{output_dir}/prompts'):
+    os.makedirs(f'{output_dir}/prompts')
+if not os.path.exists(f'{output_dir}/responses'):
+    os.makedirs(f'{output_dir}/responses')
 
 def build_prompt_icl(book_content: str, question_options: str) -> str:
     """创建提示词
@@ -99,7 +103,6 @@ def test(book_id: str, llm: LLM) -> dict:
 
 if __name__ == "__main__":
     llm: LLM = get_llm(model_name)
-    llm = None
     for book_id in BOOK_IDS:
         result = test(book_id, llm)
         save_json(result, f"{output_dir}/{book_id}.json")

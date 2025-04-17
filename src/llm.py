@@ -31,12 +31,23 @@ class Gemini2Flash(LLM):
         return response.text
     
 class Deepseek(LLM):
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, reason: bool = False):
         self.api_key = api_key
         self.system_prompt = ""
         self.client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+        self.reason = reason
 
     def generate(self, prompt: str) -> str:
+        if self.reason:
+            response = self.client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False
+            )
+            return response.choices[0].message.content
         response = self.client.chat.completions.create(
             model="deepseek-chat",
             messages=[
@@ -60,5 +71,11 @@ def get_llm(llm_name: str, api_key: str | None = None) -> LLM:
             if api_key is None:
                 raise ValueError("DEEPSEEK_API_KEY is not set")
         return Deepseek(api_key)
+    elif llm_name == "deepseek-r1":
+        if api_key is None:
+            api_key = os.getenv("DEEPSEEK_API_KEY")
+            if api_key is None:
+                raise ValueError("DEEPSEEK_API_KEY is not set")
+        return Deepseek(api_key, reason=True)
     else:
         raise ValueError(f"Unknown LLM: {llm_name}")
