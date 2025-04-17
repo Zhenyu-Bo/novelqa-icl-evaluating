@@ -1,6 +1,6 @@
 import json
 from functools import cached_property
-from src.data import QuestionModel
+from .data import QuestionModel
 
 class BookLoader:
     def __init__(self, book_path: str, book_id: str):

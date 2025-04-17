@@ -24,6 +24,7 @@ def extract_entries(response_str: str) -> list[dict]:
                 })
             current_id = match.group(1)
             analysis_lines = []
+            evidence_lines = []
             is_evidence_line = False
         elif re.match(r'^Answer: [A-D]$', stripped_line):
             current_answer = stripped_line.split(' ')[-1]
@@ -52,7 +53,7 @@ def merge(entries: list[dict], question_dict: dict):
             question_dict[question_id]["ModelAnswer"] = entry['answer']
             question_dict[question_id]['Analysis'] = entry['analysis']
             question_dict[question_id]['Evidence'] = entry['evidence']
-            question_dict[question_id]["Correct"] = entry['answer'] == question_dict[question_id]['Answer']
+            question_dict[question_id]["Correct"] = entry['answer'] == question_dict[question_id]['Answer'] or entry['answer'] == question_dict[question_id]['Gold']
 
     for key in question_dict:
         if 'ModelAnswer' not in question_dict[key]:

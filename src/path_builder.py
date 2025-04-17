@@ -13,7 +13,11 @@ class NovelQAPathBuilder:
         return file_path
 
     def get_book_path(self, book_id: str) -> str:
+        if book_id == 'B30':
+            return self.__check_path_exists(f"{self.base_dir}/Demonstration/{book_id}.txt")
         return self.__check_path_exists(f"{self.base_dir}/Books/PublicDomain/{book_id}.txt")
     
     def get_question_path(self, book_id: str) -> str:
+        if book_id == 'B30':
+            return self.__check_path_exists(f"{self.base_dir}/Demonstration/{book_id}.json")
         return self.__check_path_exists(f"{self.base_dir}/Data/PublicDomain/{book_id}.json")
