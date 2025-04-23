@@ -20,8 +20,6 @@ class Chapterizer:
         lines = self.book_content.split('\n')
         lines = [self._remove_invisible_chars(line) for line in lines]
 
-        prev_idx = None
-
         stk: list[int] = [1]
         structure_stk: list[dict] = [self.structure]
 
@@ -45,6 +43,60 @@ class Chapterizer:
         while len(structure_stk) > 1:
             pop_structure = structure_stk.pop()
             structure_stk[-1]["structures"].append(pop_structure)
+
+    def structure_from_markdown(self, markdown: str):
+        lines = markdown.split('\n')
+        self.structure = self._structrue_from_markdown_recursive(lines, 1)
+        self.structure = self._fill_content_recursive(self.structure, self.book_content)
+        self._chapter_from_structure(self.structure, 1)
+
+    @staticmethod
+    def _structrue_from_markdown_recursive(lines: str, level: int) -> dict:
+        structure = {}
+        current_line = lines.pop(0)
+        current_level = current_level.count('#')
+        next_structures = []
+        while len(lines) > 0 and lines[0].count('#') > current_level:
+            next_structures.append(Chapterizer._structrue_from_markdown_recursive(lines, current_level))
+        structure['title'] = current_line.strip('#').strip()
+        structure['structures'] = next_structures
+        result = structure
+        for _ in range(level - current_level - 1):
+            result = {'title': '', 'structures': [result]}
+        return structure
+    
+    @staticmethod
+    def _fill_content_recursive(structure: dict, book_content: str) -> dict:
+        if len(structure['structures']) == 0:
+            structure.pop('structures')
+            structure['content'] = book_content
+            return structure
+        lines = book_content.split('\n')
+        lines = [Chapterizer._remove_invisible_chars(line) for line in lines]
+        while len(lines) > 0 and not lines[0].strip():
+            lines.pop(0)
+        assert lines[0].startswith(structure['title']), f"{lines[0]}\n{structure['title']}"
+        lines.pop(0)
+        current_structure_idx = 0
+        structures = structure['structures']
+        structure_contents = [structure['title']]
+        while len(lines) > 0:
+            while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or lines[0].strip().lower() != structures[current_structure_idx]['title'].strip().lower()):
+                structure_contents[-1] += '\n' + lines.pop(0)
+            if len(lines):
+                structure_contents.append(lines.pop(0))
+            current_structure_idx += 1
+        assert current_structure_idx == len(structures) + 1, f"{current_structure_idx} {len(structures)}, {structures}"
+        structure['content'] = structure_contents[0]
+        for i in range(1, len(structure_contents)):
+            structure['structures'][i - 1] = Chapterizer.fill_content(structure['structures'][i - 1], structure_contents[i])
+        return structure
+
+    def _chapter_from_structure(self, structure: dict, level: int) -> dict:
+        self.chapter_levels[structure['title']] = level
+        self.chapter_titles.append(structure['title'])
+        for structure in structure['structures']:
+            self._chapter_from_structure(structure, level + 1)
 
     def get_structure(self):
         return self.structure
