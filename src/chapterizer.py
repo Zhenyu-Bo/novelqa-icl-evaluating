@@ -2,6 +2,7 @@ from functools import cached_property
 import re
 from .utils import save_json
 import unicodedata
+import os
 
 class Chapterizer:
     def __init__(self, book_content: str, book_title: str, chapter_patterns: list[re.Pattern]):
@@ -102,6 +103,8 @@ class Chapterizer:
         return self.structure
     
     def save_structure(self, path: str, content: bool = False):
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path))
         if not content:
             new_structure = self.get_no_content(self.structure)
             save_json(new_structure, path)
