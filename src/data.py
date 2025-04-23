@@ -23,6 +23,9 @@ class QuestionModel:
         for option in self.options:
             self.options[option] = f"{option}. {self.options[option]}"
         return '\n'.join(self.options.values())
+    
+    def get_question_str(self) -> str:
+        return self.question
 
     def get_question_options(self) -> str:
         """获取题目和选项的字符串表示"""

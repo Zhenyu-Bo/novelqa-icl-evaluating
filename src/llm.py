@@ -21,15 +21,16 @@ class Gemini2Flash(LLM):
     def generate(self, prompt: str) -> str:
         response = self.client.models.generate_content(
             model="gemini-2.0-flash",
-        config=types.GenerateContentConfig(
-            system_instruction=self.system_prompt,
-            temperature=1.0,
-            top_p=0.95,
-            max_output_tokens=8192,),
+            config=types.GenerateContentConfig(
+                system_instruction=self.system_prompt,
+                temperature=1.0,
+                top_p=0.95,
+                max_output_tokens=8192,),
             contents=[prompt]
         )
+        print(response)
         return response.text
-    
+
 class Deepseek(LLM):
     def __init__(self, api_key: str, reason: bool = False):
         self.api_key = api_key
