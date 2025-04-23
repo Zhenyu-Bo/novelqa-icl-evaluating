@@ -1,6 +1,6 @@
 from functools import cached_property
 import re
-from utils import save_json
+from .utils import save_json
 import unicodedata
 
 class Chapterizer:
@@ -54,7 +54,7 @@ class Chapterizer:
     def _structrue_from_markdown_recursive(lines: str, level: int) -> dict:
         structure = {}
         current_line = lines.pop(0)
-        current_level = current_level.count('#')
+        current_level = current_line.count('#')
         next_structures = []
         while len(lines) > 0 and lines[0].count('#') > current_level:
             next_structures.append(Chapterizer._structrue_from_markdown_recursive(lines, current_level))
@@ -68,14 +68,14 @@ class Chapterizer:
     @staticmethod
     def _fill_content_recursive(structure: dict, book_content: str) -> dict:
         if len(structure['structures']) == 0:
-            structure.pop('structures')
+            # structure.pop('structures')
             structure['content'] = book_content
             return structure
         lines = book_content.split('\n')
         lines = [Chapterizer._remove_invisible_chars(line) for line in lines]
         while len(lines) > 0 and not lines[0].strip():
             lines.pop(0)
-        assert lines[0].startswith(structure['title']), f"{lines[0]}\n{structure['title']}"
+        assert lines[0].lower().startswith(structure['title'].lower()), f"{lines[0]}\n{structure['title']}"
         lines.pop(0)
         current_structure_idx = 0
         structures = structure['structures']
@@ -89,7 +89,7 @@ class Chapterizer:
         assert current_structure_idx == len(structures) + 1, f"{current_structure_idx} {len(structures)}, {structures}"
         structure['content'] = structure_contents[0]
         for i in range(1, len(structure_contents)):
-            structure['structures'][i - 1] = Chapterizer.fill_content(structure['structures'][i - 1], structure_contents[i])
+            structure['structures'][i - 1] = Chapterizer._fill_content_recursive(structure['structures'][i - 1], structure_contents[i])
         return structure
 
     def _chapter_from_structure(self, structure: dict, level: int) -> dict:
@@ -101,8 +101,20 @@ class Chapterizer:
     def get_structure(self):
         return self.structure
     
-    def save_structure(self, path: str):
+    def save_structure(self, path: str, content: bool = False):
+        if not content:
+            new_structure = self.get_no_content(self.structure)
+            save_json(new_structure, path)
+            return
         save_json(self.structure, path)
+
+    @staticmethod
+    def get_no_content(structure: dict) -> dict:
+        new_structure = dict(structure)
+        new_structure.pop('content')
+        for i in range(len(new_structure['structures'])):
+            new_structure['structures'][i] = Chapterizer.get_no_content(new_structure['structures'][i])
+        return new_structure
 
     def get_chapter_contents(self, level: int = 0):
         if level <= 0 and level > -self.structure_depth:
