@@ -102,6 +102,18 @@ class Chapterizer:
         # 调用递归函数，从章节结构中生成章节标题字典chapter_levels和章节标题列表chapter_titles
         self._chapter_from_structure(self.structure, 1)
 
+    def structure_from_nocontent_structure(self, structure: dict):
+        """从无内容的章节结构中加载章节结构，主要是为了方便用户修改章节结构
+        Args:
+            structure (dict): 无内容的章节结构
+        Returns:
+            dict: 章节结构字典
+        """
+        # 调用递归函数，从章节结构中填充内容
+        self.structure = self._fill_content_recursive(structure, self.book_content)
+        # 调用递归函数，从章节结构中生成章节标题字典chapter_levels和章节标题列表chapter_titles
+        self._chapter_from_structure(self.structure, 1)
+
     @staticmethod
     def _structrue_from_markdown_recursive(lines: str, level: int) -> dict:
         """递归方法，从markdown中加载章节结构

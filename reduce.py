@@ -2,6 +2,7 @@ from src.llm import LLM, get_llm
 from src.path_builder import NovelQAPathBuilder
 from src.loader import BookLoader, QuestionLoader
 from src.utils import load_json, save_json
+from src.chapterizer import Chapterizer
 import unicodedata
 import os
 
@@ -74,18 +75,18 @@ for book_id in BOOK_IDS:
     question = question_loader.get_by_id('Q0205')
     transformed_question = question_transform(question.get_question_str(), llm)
     structure = load_json(f'structures/{book_id}.json')
-    structure = fill_content(structure, book_content)
+    chapterizer = Chapterizer(book_content, book_id, [])
+    chapterizer.structure_from_nocontent_structure(structure)
     prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. Here is the question: {question.get_question_options()}, and the following are the answers for each chapter. """
-    # for part in structure['structures']:
-    #     part_title = part['title']
-    for chapter in structure['structures']:
-        chapter_title = chapter['title']
-        chapter_content = chapter['content']
-        print(f"Book: {book_id}, Chapter: {chapter_title}")
-        prompt_chapter = build_prompt_icl(chapter_content, transformed_question)
+    for title, content in chapterizer.get_chapter_contents().items():
+        titles = title.split('_')
+        title_desc = titles[-1]
+        for t in titles[:-1]:
+            title_desc += ' of ' + t
+        prompt_chapter = build_prompt_icl(content, transformed_question)
         answer_chapter = llm.generate(prompt_chapter)
         print(answer_chapter)
-        prompt_final += f"""The answer to the chapter {chapter_title} is {answer_chapter}. """
+        prompt_final += f"""The answer to the chapter {title_desc} is {answer_chapter}. """
     print(prompt_final)
     prompt_final += f"""Now give your analysis and then the best choice of the original question."""
     answer_final = llm.generate(prompt_final)
