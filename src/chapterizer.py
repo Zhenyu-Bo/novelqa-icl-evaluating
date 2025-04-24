@@ -385,7 +385,7 @@ class Chapterizer:
         result_list = []
         def get_chapter_content(structure, current_key, current_level):
             """递归方法，获取指定级别章节的内容"""
-            if current_level == level:
+            if current_level == level or len(structure['structures']) == 0:
                 result_dict[current_key] = self._get_structure_content(structure)
                 result_list.append(current_key)
                 return

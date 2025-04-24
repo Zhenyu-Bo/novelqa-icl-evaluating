@@ -33,38 +33,9 @@ BOOK_IDS.remove("B30")
 BOOK_IDS.remove("B45")
 BOOK_IDS.remove("B48") # 内容太长，予以舍弃
 
-def fill_content(structure: dict, book_content: str) -> dict:
-    if len(structure['structures']) == 0:
-        structure.pop('structures')
-        structure['content'] = book_content
-        return structure
-    lines = book_content.split('\n')
-    lines = [remove_invisible_chars(line) for line in lines]
-    while len(lines) > 0 and not lines[0].strip():
-        lines.pop(0)
-    assert lines[0].startswith(structure['title']), f"{lines[0]}\n{structure['title']}"
-    lines.pop(0)
-    current_structure_idx = 0
-    structures = structure['structures']
-    structure_contents = [structure['title']]
-    while len(lines) > 0:
-        while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or lines[0].strip().lower() != structures[current_structure_idx]['title'].strip().lower()):
-            structure_contents[-1] += '\n' + lines.pop(0)
-        if len(lines):
-            structure_contents.append(lines.pop(0))
-        current_structure_idx += 1
-    assert current_structure_idx == len(structures) + 1, f"{current_structure_idx} {len(structures)}, {structures}"
-    structure['content'] = structure_contents[0]
-    for i in range(1, len(structure_contents)):
-        structure['structures'][i - 1] = fill_content(structure['structures'][i - 1], structure_contents[i])
-    return structure
-
 llm: LLM = get_llm('deepseek')
 
 for book_id in BOOK_IDS:
-    # break
-    if not book_id == 'B02':
-        continue
     book_path = path_builder.get_book_path(book_id)
     book_loader = BookLoader(book_path, book_id)
     book_loader.load()
@@ -72,29 +43,23 @@ for book_id in BOOK_IDS:
     question_path = path_builder.get_question_path(book_id)
     question_loader = QuestionLoader(question_path, book_id)
     question_loader.load()
-    question = question_loader.get_by_id('Q0205')
-    transformed_question = question_transform(question.get_question_str(), llm)
-    structure = load_json(f'structures/{book_id}.json')
-    chapterizer = Chapterizer(book_content, book_id, [])
-    chapterizer.structure_from_nocontent_structure(structure)
-    prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. Here is the question: {question.get_question_options()}, and the following are the answers for each chapter. """
-    for title, content in chapterizer.get_chapter_contents().items():
-        titles = title.split('_')
-        title_desc = titles[-1]
-        for t in titles[:-1]:
-            title_desc += ' of ' + t
-        prompt_chapter = build_prompt_icl(content, transformed_question)
-        answer_chapter = llm.generate(prompt_chapter)
-        print(answer_chapter)
-        prompt_final += f"""The answer to the chapter {title_desc} is {answer_chapter}. """
-    print(prompt_final)
-    prompt_final += f"""Now give your analysis and then the best choice of the original question."""
-    answer_final = llm.generate(prompt_final)
-    print(answer_final)
-import sys; sys.exit(0)
-
-
-if __name__ == '__main__':
-    llm: LLM = get_llm('deepseek')
-    question = r"""Who speaks with an Australian accent?"""
-    question_transform(question, llm)
+    for question_id, question in question_loader.get_whole().items():
+        question = question_loader.get_by_id(question_id)
+        transformed_question = question_transform(question.get_question_str(), llm)
+        chapterizer = Chapterizer(book_content, book_id)
+        structure = chapterizer.get_structure()
+        prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. Here is the question: {question.get_question_options()}, and the following are the answers for each chapter. """
+        structure_dict, titles = chapterizer.get_chapter_contents()
+        for title in titles:
+            title_desc = title.split('_')[-1]
+            for t in title.split('_')[:-1]:
+                title_desc +='of'+ t
+            content = structure_dict[title]
+            prompt_chapter = build_prompt_icl(content, transformed_question)
+            answer_chapter = llm.generate(prompt_chapter)
+            print(answer_chapter)
+            prompt_final += f"""The answer to the chapter {title_desc} is {answer_chapter}. """
+        print(prompt_final)
+        prompt_final += f"""Now give your analysis and then the best choice of the original question."""
+        answer_final = llm.generate(prompt_final)
+        print(answer_final)
