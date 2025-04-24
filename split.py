@@ -7,61 +7,74 @@ import re
 import os
 
 # 一些书籍的章节标题格式
-chapter_patterns = {}
-chapter_patterns["B00"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+\.\s+.*'), re.compile(r'^PART\s+[IVXLCDM]+\.\s+.*')]
-chapter_patterns["B02"] = [re.compile(r'^[A-Z\s]+$')]
-chapter_patterns["B05"] = [re.compile(r'^[IVXLCDM]+\.$'), re.compile(r'^PART\s+[IVXLCDM]+\s*$')]
-chapter_patterns["B07"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+\.$'), re.compile(r'^BOOK\s+[IVXLCDM]+\.\s*$')]
-chapter_patterns["B10"] = [re.compile(r'^CHAPTER\s+[1-9][0-9]*\.$')]
-chapter_patterns["B11"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+$'), re.compile(r'^BOOK\s+[IVXLCDM]+\s*$')]
-chapter_patterns["B13"] = [re.compile(r'^CHAPTER\s+[1-9][0-9]*$'), re.compile(r'^BOOK\s+[IVXLCDM]+\s*$')]
-chapter_patterns["B14"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+\.\s+.*'), re.compile(r'^Book\sthe\s.*')]
-chapter_patterns["B17"] = [re.compile(r'^Chapter\s+[A-Z][a-z]+\s*$'), re.compile(r'^BOOK\s+[A-Z]+\s*$')]
-chapter_patterns["B18"] = [re.compile(r'^[IVXLCDM]+$')]
+# chapter_patterns = {}
+# chapter_patterns["B00"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+\.\s+.*'), re.compile(r'^PART\s+[IVXLCDM]+\.\s+.*')]
+# chapter_patterns["B02"] = [re.compile('^(INTRODUCTION|THE TALES AND THE PERSONS)$'), re.compile(r'^PART\s+[A-Z]+$'), re.compile(r'^[A-Z\s]+$')]
+# chapter_patterns["B03"] = [re.compile(r'^Part\s+[A-Z][a-z]+\s*$'), re.compile(r'^CHAPTER\s+[IVXLCDM]+\s*$')]
+# chapter_patterns["B05"] = [re.compile(r'^[IVXLCDM]+\.$'), re.compile(r'^PART\s+[IVXLCDM]+\s*$')]
+# chapter_patterns["B07"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+\.$'), re.compile(r'^BOOK\s+[IVXLCDM]+\.\s*$')]
+# chapter_patterns["B10"] = [re.compile(r'^CHAPTER\s+[1-9][0-9]*\.$')]
+# chapter_patterns["B11"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+$'), re.compile(r'^BOOK\s+[IVXLCDM]+\s*$')]
+# chapter_patterns["B13"] = [re.compile(r'^CHAPTER\s+[1-9][0-9]*$'), re.compile(r'^BOOK\s+[IVXLCDM]+\s*$')]
+# chapter_patterns["B14"] = [re.compile(r'^CHAPTER\s+[IVXLCDM]+\.\s+.*'), re.compile(r'^Book\sthe\s.*')]
+# chapter_patterns["B17"] = [re.compile(r'^Chapter\s+[A-Z][a-z]+\s*$'), re.compile(r'^BOOK\s+[A-Z]+\s*$')]
+# chapter_patterns["B18"] = [re.compile(r'^[IVXLCDM]+$')]
 
-# 示例使用
-BOOK_ID = 'B00'
+BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
+BOOK_IDS.remove("B06")
+BOOK_IDS.remove("B30")
+BOOK_IDS.remove("B45")
+BOOK_IDS.remove("B48") # 内容太长，予以舍弃
 
-# 加载书籍内容和标题
-path_builder = NovelQAPathBuilder('./data/NovelQA')
-book_loader = BookLoader(path_builder.get_book_path(BOOK_ID), BOOK_ID)
-book_loader.load()
-book_content = book_loader.get_content()
-meta_data_loader = BookMetaDataLoader(path_builder.get_meta_data_path())
-meta_data_loader.load()
-title = meta_data_loader.get_title(BOOK_ID)
+i = 0
+while i < len(BOOK_IDS):
+    book_id = BOOK_IDS[i]
+    path_builder = NovelQAPathBuilder('./data/NovelQA')
+    book_loader = BookLoader(path_builder.get_book_path(book_id), book_id)
+    book_loader.load()
+    book_content = book_loader.get_content()
+    meta_data_loader = BookMetaDataLoader(path_builder.get_meta_data_path())
+    meta_data_loader.load()
+    title = meta_data_loader.get_title(book_id)
 
-# 章节化
-chapterizer = Chapterizer(book_content, title, chapter_patterns[BOOK_ID])
+    # 章节化
+    chapterizer = Chapterizer(book_content, title)
 
-# 生成章节标题
-markdown = chapterizer.to_markdwon()
+    # 生成章节标题
+    markdown = chapterizer.to_markdwon()
 
-# 保存章节标题
-if not os.path.exists(f'structures/titles'):
-    os.makedirs(f'structures/titles')
+    # 保存章节标题
+    if not os.path.exists(f'structures/titles'):
+        os.makedirs(f'structures/titles')
 
-with open(f'structures/titles/{BOOK_ID}.txt', 'w') as f:
-    f.write(markdown)
+    with open(f'structures/titles/{book_id}.txt', 'w') as f:
+        f.write(markdown)
 
-# 中断以便用户检查生成之标题结构是否正确，如果不正确，用户可以修改生成之标题结构
-_ = input("请检查生成的章节标题是否正确，按回车继续")
+    # 中断以便用户检查生成之标题结构是否正确，如果不正确，用户可以修改生成之标题结构
+    # _ = input("请检查生成的章节标题是否正确，按回车继续")
 
-# 加载用户修改之章节标题结构
-with open(f'structures/titles/{BOOK_ID}.txt', 'r') as f:
-    markdown = f.read()
+    # 加载用户修改之章节标题结构
+    with open(f'structures/titles/{book_id}.txt', 'r') as f:
+        markdown = f.read()
 
-# 章节化
-chapterizer.structure_from_markdown(markdown)
+    # 章节化
+    chapterizer.structure_from_markdown(markdown)
 
-# 保存章节结构
-chapterizer.save_structure(f'structures/{BOOK_ID}.json')
+    # 保存章节结构
+    chapterizer.save_structure(f'structures/{book_id}.json')
 
-chapter_dict, chapter_list = chapterizer.get_chapter_contents()
+    chapter_dict, chapter_list = chapterizer.get_chapter_contents()
 
-if not os.path.exists(f'structures/chapters/{BOOK_ID}'):
-    os.makedirs(f'structures/chapters/{BOOK_ID}')
+    if not os.path.exists(f'structures/chapters/{book_id}'):
+        os.makedirs(f'structures/chapters/{book_id}')
 
-for chapter in chapter_list:
-    with open(f'structures/chapters/{BOOK_ID}/{chapter}.txt', 'w') as f:
-        f.write(chapter_dict[chapter])
+    for chapter in chapter_list:
+        with open(f'structures/chapters/{book_id}/{chapter}.txt', 'w') as f:
+            f.write(chapter_dict[chapter])
+    
+    print(f"章节化完成 {book_id}")
+    command = input("按回车继续")
+    if command == 'q':
+        break
+    elif command != 'r':
+        i += 1

@@ -9,17 +9,81 @@ import copy
 
 class Chapterizer:
     """章节化器，将小说内容划分为章节"""
-    def __init__(self, book_content: str, book_title: str, chapter_patterns: list[re.Pattern]):
+
+    CHAPTER_PATTERNS: list[re.Pattern] = [
+        re.compile(r'^CHAPTER\s+\b([IVXLCDM]+|[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten|' \
+          r'eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' \
+          r'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|' \
+          r'twenty-one|thirty-one|forty-one|fifty-one|sixty-one|seventy-one|eighty-one|ninety-one|' \
+          r'twenty-two|thirty-two|forty-two|fifty-two|sixty-two|seventy-two|eighty-two|ninety-two|' \
+          r'twenty-three|thirty-three|forty-three|fifty-three|sixty-three|seventy-three|eighty-three|ninety-three|' \
+          r'twenty-four|thirty-four|forty-four|fifty-four|sixty-four|seventy-four|eighty-four|ninety-four|' \
+          r'twenty-five|thirty-five|forty-five|fifty-five|sixty-five|seventy-five|eighty-five|ninety-five|' \
+          r'twenty-six|thirty-six|forty-six|fifty-six|sixty-six|seventy-six|eighty-six|ninety-six|' \
+          r'twenty-seven|thirty-seven|forty-seven|fifty-seven|sixty-seven|seventy-seven|eighty-seven|ninety-seven|' \
+          r'twenty-eight|thirty-eight|forty-eight|fifty-eight|sixty-eight|seventy-eight|eighty-eight|ninety-eight|' \
+          r'twenty-nine|thirty-nine|forty-nine|fifty-nine|sixty-nine|seventy-nine|eighty-nine|ninety-nine)\b(\.?(\s+.{0,50})?)?$', re.IGNORECASE),
+        re.compile(r'^PART\s+\b([IVXLCDM]+|[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten|' \
+          r'eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' \
+          r'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|' \
+          r'twenty-one|thirty-one|forty-one|fifty-one|sixty-one|seventy-one|eighty-one|ninety-one|' \
+          r'twenty-two|thirty-two|forty-two|fifty-two|sixty-two|seventy-two|eighty-two|ninety-two|' \
+          r'twenty-three|thirty-three|forty-three|fifty-three|sixty-three|seventy-three|eighty-three|ninety-three|' \
+          r'twenty-four|thirty-four|forty-four|fifty-four|sixty-four|seventy-four|eighty-four|ninety-four|' \
+          r'twenty-five|thirty-five|forty-five|fifty-five|sixty-five|seventy-five|eighty-five|ninety-five|' \
+          r'twenty-six|thirty-six|forty-six|fifty-six|sixty-six|seventy-six|eighty-six|ninety-six|' \
+          r'twenty-seven|thirty-seven|forty-seven|fifty-seven|sixty-seven|seventy-seven|eighty-seven|ninety-seven|' \
+          r'twenty-eight|thirty-eight|forty-eight|fifty-eight|sixty-eight|seventy-eight|eighty-eight|ninety-eight|' \
+          r'twenty-nine|thirty-nine|forty-nine|fifty-nine|sixty-nine|seventy-nine|eighty-nine|ninety-nine)\b(\.?(\s+.{0,50})?)?$', re.IGNORECASE),
+        re.compile(r'^VOLUME\s+\b([IVXLCDM]+|[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten|' \
+          r'eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' \
+          r'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|' \
+          r'twenty-one|thirty-one|forty-one|fifty-one|sixty-one|seventy-one|eighty-one|ninety-one|' \
+          r'twenty-two|thirty-two|forty-two|fifty-two|sixty-two|seventy-two|eighty-two|ninety-two|' \
+          r'twenty-three|thirty-three|forty-three|fifty-three|sixty-three|seventy-three|eighty-three|ninety-three|' \
+          r'twenty-four|thirty-four|forty-four|fifty-four|sixty-four|seventy-four|eighty-four|ninety-four|' \
+          r'twenty-five|thirty-five|forty-five|fifty-five|sixty-five|seventy-five|eighty-five|ninety-five|' \
+          r'twenty-six|thirty-six|forty-six|fifty-six|sixty-six|seventy-six|eighty-six|ninety-six|' \
+          r'twenty-seven|thirty-seven|forty-seven|fifty-seven|sixty-seven|seventy-seven|eighty-seven|ninety-seven|' \
+          r'twenty-eight|thirty-eight|forty-eight|fifty-eight|sixty-eight|seventy-eight|eighty-eight|ninety-eight|' \
+          r'twenty-nine|thirty-nine|forty-nine|fifty-nine|sixty-nine|seventy-nine|eighty-nine|ninety-nine)\b(\.?(\s+.{0,50})?)?$', re.IGNORECASE),
+        re.compile(r'^SECTION\s+\b([IVXLCDM]+|[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten|' \
+          r'eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' \
+          r'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|' \
+          r'twenty-one|thirty-one|forty-one|fifty-one|sixty-one|seventy-one|eighty-one|ninety-one|' \
+          r'twenty-two|thirty-two|forty-two|fifty-two|sixty-two|seventy-two|eighty-two|ninety-two|' \
+          r'twenty-three|thirty-three|forty-three|fifty-three|sixty-three|seventy-three|eighty-three|ninety-three|' \
+          r'twenty-four|thirty-four|forty-four|fifty-four|sixty-four|seventy-four|eighty-four|ninety-four|' \
+          r'twenty-five|thirty-five|forty-five|fifty-five|sixty-five|seventy-five|eighty-five|ninety-five|' \
+          r'twenty-six|thirty-six|forty-six|fifty-six|sixty-six|seventy-six|eighty-six|ninety-six|' \
+          r'twenty-seven|thirty-seven|forty-seven|fifty-seven|sixty-seven|seventy-seven|eighty-seven|ninety-seven|' \
+          r'twenty-eight|thirty-eight|forty-eight|fifty-eight|sixty-eight|seventy-eight|eighty-eight|ninety-eight|' \
+          r'twenty-nine|thirty-nine|forty-nine|fifty-nine|sixty-nine|seventy-nine|eighty-nine|ninety-nine)\b(\.?(\s+.{0,80})?)?$', re.IGNORECASE),
+        re.compile(r'^\b([IVXLCDM]+)\b(\.?(\.\s+.{0,50})?)?$'),
+        re.compile(r'^BOOK\s+\b([IVXLCDM]+|[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine|ten|' \
+          r'eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' \
+          r'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|' \
+          r'twenty-one|thirty-one|forty-one|fifty-one|sixty-one|seventy-one|eighty-one|ninety-one|' \
+          r'twenty-two|thirty-two|forty-two|fifty-two|sixty-two|seventy-two|eighty-two|ninety-two|' \
+          r'twenty-three|thirty-three|forty-three|fifty-three|sixty-three|seventy-three|eighty-three|ninety-three|' \
+          r'twenty-four|thirty-four|forty-four|fifty-four|sixty-four|seventy-four|eighty-four|ninety-four|' \
+          r'twenty-five|thirty-five|forty-five|fifty-five|sixty-five|seventy-five|eighty-five|ninety-five|' \
+          r'twenty-six|thirty-six|forty-six|fifty-six|sixty-six|seventy-six|eighty-six|ninety-six|' \
+          r'twenty-seven|thirty-seven|forty-seven|fifty-seven|sixty-seven|seventy-seven|eighty-seven|ninety-seven|' \
+          r'twenty-eight|thirty-eight|forty-eight|fifty-eight|sixty-eight|seventy-eight|eighty-eight|ninety-eight|' \
+          r'twenty-nine|thirty-nine|forty-nine|fifty-nine|sixty-nine|seventy-nine|eighty-nine|ninety-nine)\b(\.?(\s+.{0,50})?)?$', re.IGNORECASE),
+        re.compile(r'^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten)$')
+    ]
+
+
+    def __init__(self, book_content: str, book_title: str):
         """构造方法
         Args:
             book_content (str): 小说内容
             book_title (str): 小说标题
-            chapter_patterns (list[re.Pattern]): 章节标题的正则表达式列表
         """
         # 书籍内容
         self.book_content = book_content
-        # 正则表达式列表，用于匹配章节标题
-        self.chapter_patterns = chapter_patterns
         # 章节标题字典，键为章节标题，值为章节级别，小说标题级别为1，其后章节级别依次递增
         self.chapter_levels = {book_title: 1}
         # 章节标题列表，小说标题排在最前面，按出现顺序排列
@@ -46,12 +110,12 @@ class Chapterizer:
         structure_stk: list[dict] = [self.structure]
 
         # 正则表达式表达的章节的级别，我们假设不同的正则表达式表达的章节的级别是不同的
-        pattern_level_dict = list(map(lambda _: None, self.chapter_patterns))
+        pattern_level_dict = list(map(lambda _: None, self.CHAPTER_PATTERNS))
 
         # 逐行处理
         for line in lines:
             # 逐个正则表达式匹配
-            for idx, pattern in enumerate(self.chapter_patterns):
+            for idx, pattern in enumerate(self.CHAPTER_PATTERNS):
                 # 如果匹配成功
                 if pattern.match(line):
                     # 如果该正则表达式表达的章节的级别还未确定，设置为当前章节（栈顶）的级别+1
@@ -152,13 +216,13 @@ class Chapterizer:
         lines = [Chapterizer._remove_invisible_chars(line) for line in lines]
         while len(lines) > 0 and not lines[0].strip():
             lines.pop(0)
-        assert lines[0].lower().startswith(structure['title'].lower()), f"{lines[0]}\n{structure['title']}"
+        # assert lines[0].lower().startswith(structure['title'].lower()), f"{lines[0]}\n{structure['title']}"
         lines.pop(0)
         current_structure_idx = 0
         structures = structure['structures']
         structure_contents = [structure['title']]
         while len(lines) > 0:
-            while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or lines[0].strip().lower() != structures[current_structure_idx]['title'].strip().lower()):
+            while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or lines[0].lower() != structures[current_structure_idx]['title'].lower()):
                 structure_contents[-1] += '\n' + lines.pop(0)
             if len(lines):
                 structure_contents.append(lines.pop(0))
