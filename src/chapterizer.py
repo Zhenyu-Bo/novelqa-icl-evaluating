@@ -102,14 +102,15 @@ class Chapterizer:
         """章节化"""
         # 分行并移除不可见字符
         lines = self.book_content.split('\n')
-        lines = [self._remove_invisible_chars(line) for line in lines]
+        lines = [self._remove_invisible_chars(line) for line in lines if line.strip()]
+        lines = self._ignore_toc(lines)
 
         # 单调栈结构，存储既往章节的级别
         stk: list[int] = [1]
         # 栈结构，与stk对应，存储既往章节的结构
         structure_stk: list[dict] = [self.structure]
 
-        # 正则表达式表达的章节的级别，我们假设不同的正则表达式表达的章节的级别是不同的
+        # 正则表达式表达的章节的级别，我们假设不同的正则表达式表达的章节的级别是不同的，这需要我们设法去除目录
         pattern_level_dict = list(map(lambda _: None, self.CHAPTER_PATTERNS))
 
         # 逐行处理
@@ -118,6 +119,8 @@ class Chapterizer:
             for idx, pattern in enumerate(self.CHAPTER_PATTERNS):
                 # 如果匹配成功
                 if pattern.match(line):
+                    matched = True
+                    # print(idx, prev_pattern_idx)
                     # 如果该正则表达式表达的章节的级别还未确定，设置为当前章节（栈顶）的级别+1
                     if pattern_level_dict[idx] is None:
                         pattern_level_dict[idx] = stk[-1] + 1
@@ -149,6 +152,42 @@ class Chapterizer:
         while len(structure_stk) > 1:
             pop_structure = structure_stk.pop()
             structure_stk[-1]["structures"].append(pop_structure)
+
+    @staticmethod
+    def _ignore_toc(lines: list[str]) -> list[str]:
+        """忽略目录，返回去除目录后的内容"""
+        new_lines = []
+        toc_pattern_idx = None
+        is_toc = False
+        prev_idx = None
+        has_toc = False
+        for line in lines:
+            if line.strip() == '':
+                # new_lines.append(line)
+                continue
+            matched = False
+            for idx, pattern in enumerate(Chapterizer.CHAPTER_PATTERNS):
+                if pattern.match(line):
+                    matched = True
+                    if idx == prev_idx and not is_toc:
+                        has_toc = True
+                        is_toc = True
+                        toc_pattern_idx = idx
+                        new_lines.pop()
+                        prev_idx = None
+                    elif is_toc and idx == toc_pattern_idx:
+                        pass
+                    else:
+                        prev_idx = idx
+                        new_lines.append(line)
+            if not matched:
+                is_toc = False
+                toc_pattern_idx = None
+                prev_idx = None
+                new_lines.append(line)
+        if not has_toc:
+            return new_lines
+        return Chapterizer._ignore_toc(new_lines)
 
     def structure_from_markdown(self, markdown: str):
         """从markdown中加载章节结构，主要是为了方便用户修改章节结构
@@ -214,6 +253,7 @@ class Chapterizer:
             return structure
         lines = book_content.split('\n')
         lines = [Chapterizer._remove_invisible_chars(line) for line in lines]
+        lines = Chapterizer._ignore_toc(lines)
         while len(lines) > 0 and not lines[0].strip():
             lines.pop(0)
         # assert lines[0].lower().startswith(structure['title'].lower()), f"{lines[0]}\n{structure['title']}"
@@ -222,7 +262,7 @@ class Chapterizer:
         structures = structure['structures']
         structure_contents = [structure['title']]
         while len(lines) > 0:
-            while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or lines[0].lower() != structures[current_structure_idx]['title'].lower()):
+            while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or not lines[0].lower().startswith(structures[current_structure_idx]['title'].lower())):
                 structure_contents[-1] += '\n' + lines.pop(0)
             if len(lines):
                 structure_contents.append(lines.pop(0))

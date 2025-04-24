@@ -3,8 +3,19 @@
 from src.chapterizer import Chapterizer
 from src.loader import BookLoader, BookMetaDataLoader
 from src.path_builder import NovelQAPathBuilder
-import re
 import os
+
+# path_builder = NovelQAPathBuilder('./data/NovelQA')
+# book_loader = BookLoader(path_builder.get_book_path("B29"), "B29")
+# book_loader.load()
+# book_content = book_loader.get_content()
+# lines = book_content.split('\n')
+# lines = Chapterizer._ignore_toc(lines)
+# with open('tmp.txt', 'w') as f:
+#     for line in lines:
+#         f.write(line + '\n')
+
+# import sys; sys.exit(0)
 
 # 一些书籍的章节标题格式
 # chapter_patterns = {}
@@ -73,8 +84,9 @@ while i < len(BOOK_IDS):
             f.write(chapter_dict[chapter])
     
     print(f"章节化完成 {book_id}")
-    command = input("按回车继续")
-    if command == 'q':
-        break
-    elif command != 'r':
-        i += 1
+    i += 1
+    # command = input("按回车继续")
+    # if command == 'q':
+    #     break
+    # elif command != 'r':
+    #     i += 1
