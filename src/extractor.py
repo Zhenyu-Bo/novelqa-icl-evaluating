@@ -84,6 +84,16 @@ def extract_entries(response_str: str) -> list[dict]:
     
     return entries
 
+
+# 提取 LLM 的给出的选择
+def extract_option(answer: str) -> str:
+    # 使用正则表达式匹配 "my answer: {option}"
+    match = re.search(r"<answer>my final answer: ([A-D])</answer>", answer)
+    if not match:
+        print(f"Warning: No answer found in the response: {answer}")
+    return match.group(1).upper() if match else None
+
+
 def merge(entries: list[dict], question_dict: dict):
     """与既有的结果合并"""
     for entry in entries:
