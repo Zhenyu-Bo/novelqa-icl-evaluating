@@ -26,6 +26,14 @@ class QuestionModel:
     
     def get_question_str(self) -> str:
         return self.question
+    
+    def get_aspect(self) -> str:
+        """获取题目方面"""
+        return self.aspect
+    
+    def get_complexity(self) -> str:
+        """获取题目难度"""
+        return self.complexity
 
     def get_question_options(self) -> str:
         """获取题目和选项的字符串表示"""

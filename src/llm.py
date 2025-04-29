@@ -28,7 +28,7 @@ class Gemini2Flash(LLM):
                 max_output_tokens=8192,),
             contents=[prompt]
         )
-        print(response)
+        # print(response)
         return response.text
 
 class Deepseek(LLM):

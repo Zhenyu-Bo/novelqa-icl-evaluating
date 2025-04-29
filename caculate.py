@@ -30,6 +30,9 @@ for file in sorted(os.listdir(base_dir)):
                     local_correct += 1
                     aspect_correct[d["Aspect"]] += 1
                     complexity_correct[d["Complexity"]] += 1
+                if "which chapter" in d["Question"].lower():
+                    aspect_correct["Chapter"] += 1
+                    aspect_total["Chapter"] += 1
                 aspect_total[d["Aspect"]] += 1
                 complexity_total[d["Complexity"]] += 1
                 local_total += 1

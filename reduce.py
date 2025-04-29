@@ -10,10 +10,13 @@ import json
 import logging
 from dotenv import load_dotenv
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--book_id", type=str, default="all")
 parser.add_argument("--question_id", type=str, default="all")
+parser.add_argument("--max_workers", type=int, default=4, help="Number of worker processes to use")
 args = parser.parse_args()
 
 def question_transform(question: str, llm: LLM) -> str:
@@ -35,26 +38,56 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
 NOVELQA_PATH = '../RAG/ReadAgent-RAG/NovelQA'
 path_builder = NovelQAPathBuilder(NOVELQA_PATH)
 
+
 def remove_invisible_chars(s):
     return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
 
+
+# BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
 BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
-BOOK_IDS.remove("B00")  # 已测试
-BOOK_IDS.remove("B01")
-BOOK_IDS.remove("B02")
-BOOK_IDS.remove("B35")
-BOOK_IDS.remove("B36")
-BOOK_IDS.remove("B40")
-BOOK_IDS.remove("B47")
-BOOK_IDS.remove("B48")  # 内容太长，予以舍弃
-BOOK_IDS.remove("B57")
-BOOK_IDS.remove("B61")
+book_ids_to_remove = [
+    "B01",  # 未实现章节切分
+    "B02",  # 未实现章节切分
+    "B06",  # Books/PublicDomain 中没有 B06.txt
+    "B30",  # Books/PublicDomain 中没有 B30.txt
+    "B35",  # 未实现章节切分
+    "B36",  # 未实现章节切分
+    "B40",  # 未实现章节切分
+    "B45",  # Books/PublicDomain 中没有 B45.txt
+    "B47",  # 未实现章节切分
+    "B48",  # 内容太长，予以舍弃
+    "B57",  # 未实现章节切分
+    "B61",  # 未实现章节切分
+]
+question_ids_to_remove = [
+    # "Q1936",  # 回答时超出模型上下文限制 B11
+    # "Q1407",  # 回答时超出模型上下文限制 B37
+    # "Q0308",  # 回答时超出模型上下文限制 B24
+    # "Q1625",  # 回答时超出模型上下文限制 B28
+    # "Q1015",  # 回答时超出模型上下文限制 B53
+    # "Q1713",  # 回答时超出模型上下文限制 B54
+    # "Q1714",  # 回答时超出模型上下文限制 B54
+    # "Q1301",  # 回答时超出模型上下文限制 B55
+    # "Q1306",  # 回答时超出模型上下文限制 B55
+    # "Q2182",  # 回答时超出模型上下文限制 B25
+]
+for book_id in book_ids_to_remove:
+    if book_id in BOOK_IDS:
+        BOOK_IDS.remove(book_id)
 
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 llm: LLM = get_llm('gemini', api_key=api_key)
 test_aspects = ['times', 'meaning', 'character']
 test_complexity = ['dtl']
+
+# 设置日志记录
+logging.basicConfig(
+    filename="error.log",  # 日志文件路径
+    level=logging.ERROR,  # 日志级别
+    format="%(asctime)s - %(levelname)s - %(message)s",  # 日志格式
+    datefmt="%Y-%m-%d %H:%M:%S",  # 时间格式
+)
 
 
 def get_chapter_contents_cached(chapterizer, book_id: str, cache_dir: str = "./cache") -> tuple:
@@ -83,7 +116,7 @@ def get_chapter_contents_cached(chapterizer, book_id: str, cache_dir: str = "./c
     return structure_dict, titles
 
 
-def reduce_test(book_id: str, test_question_id: str, llm: LLM):
+def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = './outputs'):
     print(f"Processing book {book_id}")
     book_path = path_builder.get_book_path(book_id)
     book_loader = BookLoader(book_path, book_id)
@@ -100,12 +133,15 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM):
     for question_id, question in tqdm(question_dict.items(), desc=f"Processing questions for book {book_id}\n"):
         if test_question_id != 'all' and question_id!= test_question_id:
             continue
+        if question_id in question_ids_to_remove:
+            print(f"Question {question_id} removed, skipping.\n")
+            continue
         if is_answered(book_id, question_id):
-            print(f"Question {question_id} already answered, skipping.")
+            print(f"Question {question_id} already answered, skipping.\n")
             continue
         question = question_loader.get_by_id(question_id)
         if question.get_aspect() not in test_aspects and question.get_complexity() not in test_complexity:
-            print(f"Skipping question {question_id}, aspect: {question.get_aspect()}, complexity: {question.get_complexity()}")
+            print(f"Skipping question {question_id}, aspect: {question.get_aspect()}, complexity: {question.get_complexity()}\n")
             continue
         print(f"{question_id}: {question.get_question_str()}")
         transformed_question = question_transform(question.get_question_str(), llm)
@@ -115,7 +151,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM):
         # structure_dict, titles = chapterizer.get_chapter_contents()
         structure_dict, titles = get_chapter_contents_cached(chapterizer, book_id)  # 使用缓存函数获取章节结构数据
         chapter_answers = []
-        for title in tqdm(titles, desc="Processing chapters", leave=False):
+        for title in tqdm(titles, desc=f"Processing chapters for {book_id}", leave=False):
             title_desc = title.split('_')[-1]
             for t in title.split('_')[:-1]:
                 title_desc +=' of '+ t
@@ -142,7 +178,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM):
         question_dict[question_id]["TransformedQuestion"] = transformed_question
         print(f"Question {question_id} - Model Answer: {llm_option}, Correct: {is_correct}")
         prompt_final = ""
-        save_results_by_question(question_dict, book_id, question_id, output_dir="./outputs")
+        save_results_by_question(question_dict, book_id, question_id, output_dir=output_dir)
 
     return question_dict
 
@@ -189,13 +225,47 @@ def is_answered(book_id: str, question_id: str, output_dir: str = './outputs') -
     return False
 
 
+def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs'):
+    try:
+        # 在子进程中重新初始化 llm
+        api_key = os.environ.get("GEMINI_API_KEY")
+        llm = get_llm(model_name, api_key=api_key)
+        reduce_test(book_id, question_id, llm, output_dir=output_dir)
+        return f"Book {book_id} processed successfully."
+    except KeyboardInterrupt:
+        # 捕获键盘中断异常，退出进程
+        raise
+    except Exception as e:
+        logging.error(f"Error processing {question_id} of {book_id}: {e}", exc_info=True)
+        return f"Error processing book {book_id}: {e}"
+
+
 if __name__ == "__main__":
     output_dir = "./outputs"
     os.makedirs(output_dir, exist_ok=True)
-    # BOOK_IDS = [f"B{i:02}" for i in range(0, 1)]
+    # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
     for book_id in tqdm(BOOK_IDS, desc="Processing books"):
         if args.book_id != 'all' and book_id != args.book_id:
             continue
         results = reduce_test(book_id, args.question_id, llm)
         # save_results(results, book_id, output_dir=output_dir)
+    # 设置多进程池
+    # max_workers = min(len(BOOK_IDS), args.max_workers)  # 使用 CPU 核心数或书本数中的较小值
+    # with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    #     # 提交每本书的任务到进程池
+    #     futures = {
+    #         executor.submit(process_book, book_id, args.book_id, 'gemini', output_dir): book_id
+    #         for book_id in BOOK_IDS
+    #         if args.book_id == 'all' or book_id == args.book_id
+    #     }
+
+    #     # 使用 tqdm 显示进度条
+    #     for future in tqdm(as_completed(futures), total=len(futures), desc="Processing books"):
+    #         book_id = futures[future]
+    #         try:
+    #             result = future.result()
+    #             print(result)
+    #         except Exception as e:
+    #             logging.error(f"Error processing book {book_id}: {e}", exc_info=True)
+    #             print(f"Error processing book {book_id}: {e}")
     

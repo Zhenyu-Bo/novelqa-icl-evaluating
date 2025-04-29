@@ -5,13 +5,14 @@ from .data import QuestionModel
 class BookLoader:
     def __init__(self, book_path: str, book_id: str):
         self.book_path = book_path
+        # print(f"Loading book from {self.book_path}")
         self.book_content = None
         self.word_count = None
         self.char_count = None
         self.book_id = book_id
 
     def load(self):
-        with open(self.book_path, 'r') as file:
+        with open(self.book_path, 'r', encoding='utf-8') as file:
             self.book_content = file.read()
         self.word_count = len(self.book_content.split())
         self.char_count = len(self.book_content)
@@ -34,7 +35,7 @@ class BookMetaDataLoader:
         self.meta_data = None
 
     def load(self):
-        with open(self.meta_data_path, 'r') as file:
+        with open(self.meta_data_path, 'r', encoding='utf-8') as file:
             self.meta_data = json.load(file)
 
     def build_description(self, book_id) -> str:

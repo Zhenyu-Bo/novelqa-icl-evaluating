@@ -87,11 +87,13 @@ def extract_entries(response_str: str) -> list[dict]:
 
 # 提取 LLM 的给出的选择
 def extract_option(answer: str) -> str:
-    # 使用正则表达式匹配 "my answer: {option}"
-    match = re.search(r"<answer>my final answer: ([A-D])</answer>", answer)
+    cleaned_answer = answer.strip()
+    # 修改正则表达式，允许可选的 "option" 字样
+    match = re.search(r"<answer>\s*my final answer:\s*(?:option\s*)?\(?\s*([A-D])\s*\)?\s*</answer>", cleaned_answer, re.IGNORECASE)
     if not match:
-        print(f"Warning: No answer found in the response: {answer}")
-    return match.group(1).upper() if match else None
+        print(f"Warning: No answer found in the response: {cleaned_answer}")
+        return None
+    return match.group(1).upper()
 
 
 def merge(entries: list[dict], question_dict: dict):
@@ -111,3 +113,10 @@ def merge(entries: list[dict], question_dict: dict):
             question_dict[key]["Correct"] = False
 
     return question_dict
+
+
+if __name__ == "__main__":
+    # 测试函数
+    test_str = "<answer>my final answer: option (B)</answer>"
+    option = extract_option(test_str)
+    print(f"Extracted option: {option}")

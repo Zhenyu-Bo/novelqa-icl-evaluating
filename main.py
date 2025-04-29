@@ -17,6 +17,7 @@ parser.add_argument('--base_dir', type=str, required=True, help="Specify the bas
 parser.add_argument('--output', type=str, required=True, help="Specify the output directory name.")
 parser.add_argument('--use_content', type=str, required=False, default=False, help="Specify whether to use content or not.")
 parser.add_argument('--title_only', type=str, required=False, default=True, help="Specify whether to use title only or not.")
+parser.add_argument('--use_reduce', type=str, required=False, default=False, help="Specify whether to use reduce or not.")
 
 args = parser.parse_args()
 model_name = args.model
