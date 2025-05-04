@@ -19,14 +19,16 @@ parser.add_argument("--question_id", type=str, default="all")
 parser.add_argument("--max_workers", type=int, default=4, help="Number of worker processes to use")
 args = parser.parse_args()
 
+
 def question_transform(question: str, llm: LLM) -> str:
     prompt: str = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel. However, the novel is too long, so I will give the novel chapter by chapter, and you need to transform the question for each chapter. You should make sure the user will be able to get the answer of the original question with only the answers of the transformed quesions for each chapter. For example, if the question is 'How many times has Alice mentioned in the novel?', the transformed question may be 'Is Alice mentioned in this chapter? If so, how many times has Alice mentioned in this chapter?', if the question is 'Which chapter mentions Alice.', the transformed question may be 'Is Alice mentioned in this chapter?', if the question is 'When Jane Eyre met Mr. Lloyd for the first time, what's her feeling towards him?', the transformed question should be 'If Jane Eyre met Mr. Lloyd in this chapter? If so, what's her feeling towards him in the first meeting?'. You output should be the following format: {{"question": "the transformed question"}}.You should give only one best transformed question, and not output anything else.\nThe given question is {question}."""
-    # print(question)
+    print("Original question:", question)
     response = llm.generate(prompt)
-    # print(response)
+    print("Response:", response)
     transformed_question = response.split('"question": "')[1].split('"')[0]
-    # print(transformed_question)
+    print("Transformed question:", transformed_question)
     return transformed_question
+
 
 def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     """创建提示词
@@ -35,7 +37,7 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     return f"""You are a literature professor. I will provide you with the full text of a chapter from a novel along with a question. Please thoroughly analyze the chapter's content to accurately respond to the following question.\nChapter Content:{chapter_content};\nBook ends. Questions start here:\n{question_options}\nQuestions end here. Try your best to answer the question based on the given full text of the chapter. The answer should be the analysis of text content around the question with the evidence from the chapter, and the answer."""
 
 
-NOVELQA_PATH = '../RAG/ReadAgent-RAG/NovelQA'
+NOVELQA_PATH = '../NovelQA'
 path_builder = NovelQAPathBuilder(NOVELQA_PATH)
 
 
@@ -59,18 +61,7 @@ book_ids_to_remove = [
     "B57",  # 未实现章节切分
     "B61",  # 未实现章节切分
 ]
-question_ids_to_remove = [
-    # "Q1936",  # 回答时超出模型上下文限制 B11
-    # "Q1407",  # 回答时超出模型上下文限制 B37
-    # "Q0308",  # 回答时超出模型上下文限制 B24
-    # "Q1625",  # 回答时超出模型上下文限制 B28
-    # "Q1015",  # 回答时超出模型上下文限制 B53
-    # "Q1713",  # 回答时超出模型上下文限制 B54
-    # "Q1714",  # 回答时超出模型上下文限制 B54
-    # "Q1301",  # 回答时超出模型上下文限制 B55
-    # "Q1306",  # 回答时超出模型上下文限制 B55
-    # "Q2182",  # 回答时超出模型上下文限制 B25
-]
+question_ids_to_remove = []
 for book_id in book_ids_to_remove:
     if book_id in BOOK_IDS:
         BOOK_IDS.remove(book_id)
@@ -116,7 +107,7 @@ def get_chapter_contents_cached(chapterizer, book_id: str, cache_dir: str = "./c
     return structure_dict, titles
 
 
-def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = './outputs'):
+def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = './outputs/reduce'):
     print(f"Processing book {book_id}")
     book_path = path_builder.get_book_path(book_id)
     book_loader = BookLoader(book_path, book_id)
@@ -136,9 +127,9 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
         if question_id in question_ids_to_remove:
             print(f"Question {question_id} removed, skipping.\n")
             continue
-        if is_answered(book_id, question_id):
-            print(f"Question {question_id} already answered, skipping.\n")
-            continue
+        # if is_answered(book_id, question_id):
+        #     print(f"Question {question_id} already answered, skipping.\n")
+        #     continue
         question = question_loader.get_by_id(question_id)
         if question.get_aspect() not in test_aspects and question.get_complexity() not in test_complexity:
             print(f"Skipping question {question_id}, aspect: {question.get_aspect()}, complexity: {question.get_complexity()}\n")
@@ -183,7 +174,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
     return question_dict
 
 
-def save_results(results: dict, book_id: str, output_dir: str = "./outputs"):
+def save_results(results: dict, book_id: str, output_dir: str = "./outputs/reduce"):
     # output_dir = f"{NOVELQA_PATH}/outputs/results"
     os.makedirs(output_dir, exist_ok=True)
     with open(f"{output_dir}/{book_id}.json", 'w+', encoding='utf-8') as file:
@@ -191,7 +182,7 @@ def save_results(results: dict, book_id: str, output_dir: str = "./outputs"):
     print(f"Results saved to {output_dir}/{book_id}.json")
 
 
-def save_results_by_question(results: dict, book_id: str, question_id: str, output_dir: str = "./outputs"):
+def save_results_by_question(results: dict, book_id: str, question_id: str, output_dir: str = "./outputs/reduce"):
     """
     保存结果到文件中。
     如果文件不存在，则直接写入 results
@@ -215,7 +206,7 @@ def save_results_by_question(results: dict, book_id: str, question_id: str, outp
     print(f"Results saved to {outfile}")
     
     
-def is_answered(book_id: str, question_id: str, output_dir: str = './outputs') -> bool:
+def is_answered(book_id: str, question_id: str, output_dir: str = './outputs/reduce') -> bool:
     outfile = os.path.join(output_dir, f"{book_id}.json")
     if os.path.exists(outfile):
         with open(outfile, 'r', encoding='utf-8') as file:
@@ -225,7 +216,7 @@ def is_answered(book_id: str, question_id: str, output_dir: str = './outputs') -
     return False
 
 
-def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs'):
+def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs/reduce'):
     try:
         # 在子进程中重新初始化 llm
         api_key = os.environ.get("GEMINI_API_KEY")
@@ -241,7 +232,7 @@ def process_book(book_id: str, question_id: str, model_name: str = 'gemini', out
 
 
 if __name__ == "__main__":
-    output_dir = "./outputs"
+    output_dir = "./outputs/reduce"
     os.makedirs(output_dir, exist_ok=True)
     # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
     for book_id in tqdm(BOOK_IDS, desc="Processing books"):

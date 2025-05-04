@@ -31,16 +31,18 @@ import os
 # chapter_patterns["B17"] = [re.compile(r'^Chapter\s+[A-Z][a-z]+\s*$'), re.compile(r'^BOOK\s+[A-Z]+\s*$')]
 # chapter_patterns["B18"] = [re.compile(r'^[IVXLCDM]+$')]
 
+base_dir = '../NovelQA'
+
 BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
 BOOK_IDS.remove("B06")
 BOOK_IDS.remove("B30")
 BOOK_IDS.remove("B45")
-BOOK_IDS.remove("B48") # 内容太长，予以舍弃
+BOOK_IDS.remove("B48")  # 内容太长，予以舍弃
 
 i = 0
 while i < len(BOOK_IDS):
     book_id = BOOK_IDS[i]
-    path_builder = NovelQAPathBuilder('./data/NovelQA')
+    path_builder = NovelQAPathBuilder(base_dir)
     book_loader = BookLoader(path_builder.get_book_path(book_id), book_id)
     book_loader.load()
     book_content = book_loader.get_content()
