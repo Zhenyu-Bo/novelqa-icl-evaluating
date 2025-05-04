@@ -20,9 +20,12 @@ class QuestionModel:
 
     def get_options_str(self) -> str:
         """获取选项的字符串表示"""
-        for option in self.options:
-            self.options[option] = f"{option}. {self.options[option]}"
-        return '\n'.join(self.options.values())
+        # for option in self.options:
+        #     self.options[option] = f"{option}. {self.options[option]}"
+        # return '\n'.join(self.options.values())
+        # 创建一个局部变量存储格式化后的选项
+        formatted_options = {option: f"{option}. {self.options[option]}" for option in self.options}
+        return '\n'.join(formatted_options.values())
     
     def get_question_str(self) -> str:
         return self.question
