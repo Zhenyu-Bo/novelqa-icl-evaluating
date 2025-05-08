@@ -19,15 +19,18 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--book_id", type=str, default="all")
 parser.add_argument("--question_id", type=str, default="all")
 parser.add_argument("--max_workers", type=int, default=4, help="Number of worker processes to use")
+parser.add_argument("--use_cache", type=bool, default=True, help="Whether to use cache for chapter contents")
+parser.add_argument("--cache_dir", type=str, default="./cache/chapters", help="Directory to store cache files")
+parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/prompt1", help="Directory to store output files")
 args = parser.parse_args()
 
 
 NOVELQA_PATH = '../NovelQA'
 path_builder = NovelQAPathBuilder(NOVELQA_PATH)
 
-
 # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
-BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
+BOOK_IDS = ["B00", "B05", "B09", "B13", "B14", "B16", "B17", "B20", "B22","B24",
+            "B25", "B29", "B33", "B34", "B37", "B43", "B44", "B53", "B55", "B60"]
 book_ids_to_remove = [
     "B01",  # 未实现章节切分
     "B02",  # 未实现章节切分
@@ -66,9 +69,9 @@ num2ord = inflect.engine()
 def question_transform(question: str, llm: LLM) -> str:
     # prompt: str = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel. However, the novel is too long, so I will give the novel chapter by chapter, and you need to transform the question for each chapter. You should make sure the user will be able to get the answer of the original question with only the answers of the transformed quesions for each chapter. Your output should only include the transformed question, and the transformed question should be wrapped in two special tokens: <answer>, </answer>. For example, if the question is '<answer>How many times has Alice mentioned in the novel?', the transformed question may be 'Is Alice mentioned in this chapter? If so, how many times has Alice mentioned in this chapter?</answer>', if the question is 'Which chapter mentions Alice.', the transformed question may be '<answer>Is Alice mentioned in this chapter?</answer>', if the question is 'When Jane Eyre met Mr. Lloyd for the first time, what's her feeling towards him?', the transformed question should be '<answer>If Jane Eyre met Mr. Lloyd in this chapter? If so, what's her feeling towards him in the first meeting?</answer>'. You should give only one best transformed question, and not output anything else.\nThe given question is {question}."""
     prompt = build_transform_question_prompt(question)
-    print("Original question:", question)
+    # print("Original question:", question)
     response = llm.generate(prompt)
-    print("Response:", response)
+    # print("Response:", response)
     transformed_question = response.replace("<answer>", "").replace("</answer>", "")
     print("Transformed question:", transformed_question)
     return transformed_question
@@ -78,7 +81,7 @@ def remove_invisible_chars(s):
     return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
 
 
-def get_chapter_contents_cached(chapterizer, book_id: str, cache_dir: str = "./cache", use_cache=True) -> tuple:
+def get_chapter_contents_cached(chapterizer, book_id: str, use_cache: bool = True, cache_dir: str = './cache') -> tuple:
     """
     检查缓存文件是否存在，若存在则直接读取 chapterizer 的结构数据，否则调用 chapterizer.get_chapter_contents() 并保存到文件中
     """
@@ -96,7 +99,17 @@ def get_chapter_contents_cached(chapterizer, book_id: str, cache_dir: str = "./c
     return structure_dict, titles
 
 
-def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = './outputs/reduce'):
+def is_answered(book_id: str, question_id: str, output_dir: str = './outputs/reduce/selected') -> bool:
+    outfile = os.path.join(output_dir, f"{book_id}.json")
+    if os.path.exists(outfile):
+        with open(outfile, 'r', encoding='utf-8') as file:
+            questions = json.load(file)
+        if question_id in questions and 'ModelAnswer' in questions[question_id]:
+            return True
+    return False
+
+
+def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = './outputs/reduce', use_cache: bool = True, cache_dir: str = './cache') -> dict:
     print(f"Processing book {book_id}")
     book_path = path_builder.get_book_path(book_id)
     book_loader = BookLoader(book_path, book_id)
@@ -116,9 +129,9 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
         if question_id in question_ids_to_remove:
             print(f"Question {question_id} removed, skipping.\n")
             continue
-        # if is_answered(book_id, question_id):
-        #     print(f"Question {question_id} already answered, skipping.\n")
-        #     continue
+        if is_answered(book_id, question_id, output_dir=output_dir):
+            print(f"Question {question_id} already answered, skipping.\n")
+            continue
         question = question_loader.get_by_id(question_id)
         if 'all' not in test_aspects and 'all' not in test_complexity:
             if question.get_aspect() not in test_aspects and question.get_complexity() not in test_complexity:
@@ -127,9 +140,8 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
         print(f"{question_id}: {question.get_question_options()}")
         transformed_question = question_transform(question.get_question_str(), llm)
         chapterizer = Chapterizer(book_content, book_title)
-        structure = chapterizer.get_structure()
         prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. Here is the original question: {question.get_question_options()}, and the following are the answers to the transformed question for each chapter. """
-        structure_dict, titles = get_chapter_contents_cached(chapterizer, book_id)  # 使用缓存函数获取章节结构数据
+        structure_dict, titles = get_chapter_contents_cached(chapterizer, book_id, use_cache=use_cache, cache_dir=cache_dir)  # 使用缓存函数获取章节结构数据
         chapter_answers = []
         i = 1
         for title in tqdm(titles, desc=f"Processing chapters for {book_id}", leave=False):
@@ -194,16 +206,6 @@ def save_results_by_question(results: dict, book_id: str, question_id: str, outp
     with open(outfile, 'w', encoding='utf-8') as file:
         json.dump(updated_results, file, ensure_ascii=False, indent=4)
     print(f"Results saved to {outfile}")
-    
-    
-def is_answered(book_id: str, question_id: str, output_dir: str = './outputs/reduce') -> bool:
-    outfile = os.path.join(output_dir, f"{book_id}.json")
-    if os.path.exists(outfile):
-        with open(outfile, 'r', encoding='utf-8') as file:
-            questions = json.load(file)
-        if question_id in questions and 'ModelAnswer' in questions[question_id]:
-            return True
-    return False
 
 
 def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs/reduce'):
@@ -222,13 +224,18 @@ def process_book(book_id: str, question_id: str, model_name: str = 'gemini', out
 
 
 if __name__ == "__main__":
-    output_dir = "./outputs/reduce"
+    # output_dir = "./outputs/reduce"
+    output_dir = args.output_dir
+    use_cache = args.use_cache
+    cache_dir = args.cache_dir
     os.makedirs(output_dir, exist_ok=True)
+    if use_cache:
+        os.makedirs(cache_dir, exist_ok=True)
     # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
     for book_id in tqdm(BOOK_IDS, desc="Processing books"):
         if args.book_id != 'all' and book_id != args.book_id:
             continue
-        results = reduce_test(book_id, args.question_id, llm)
+        results = reduce_test(book_id, args.question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
         # save_results(results, book_id, output_dir=output_dir)
     # 设置多进程池
     # max_workers = min(len(BOOK_IDS), args.max_workers)  # 使用 CPU 核心数或书本数中的较小值

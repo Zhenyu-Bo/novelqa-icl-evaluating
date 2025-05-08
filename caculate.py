@@ -17,6 +17,8 @@ if not os.path.exists(base_dir):
 
 test_aspects = ['character', 'meaning', 'times']
 test_complexity = ['dtl']
+BOOK_IDS = ["B00", "B05", "B09", "B13", "B14", "B16", "B17", "B20", "B22","B24",
+            "B25", "B29", "B33", "B34", "B37", "B43", "B44", "B53", "B55", "B60"]
 
 sum_correct = 0
 sum_total = 0
@@ -31,6 +33,8 @@ for file in sorted(os.listdir(base_dir)):
     local_correct = 0
     local_total = 0
     if file.endswith(".json"):
+        if file.replace(".json", "") not in BOOK_IDS:
+            continue
         file_path = os.path.join(base_dir, file)
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f).values()
@@ -40,11 +44,11 @@ for file in sorted(os.listdir(base_dir)):
                         continue
                 if 'Correct' not in d:
                     continue
-                if 'TransformedQuestion' in d:
-                    if d['TransformedQuestion'].lower() == "the transformed question" or d['TransformedQuestion'].lower() == "transformed question":
-                        # print(f"File: {file}, Question: {d['Question']}")
-                        # print("TransformedQuestion: ", d['TransformedQuestion'])
-                        continue
+                # if 'TransformedQuestion' in d:
+                #     if d['TransformedQuestion'].lower() == "the transformed question" or d['TransformedQuestion'].lower() == "transformed question":
+                #         # print(f"File: {file}, Question: {d['Question']}")
+                #         # print("TransformedQuestion: ", d['TransformedQuestion'])
+                #         continue
                 if d["Aspect"] not in aspect_correct:
                     aspect_correct[d["Aspect"]] = 0
                     aspect_total[d["Aspect"]] = 0
@@ -78,4 +82,4 @@ for complexity in complexity_correct:
     print(
         f"{complexity}: {complexity_correct[complexity] / complexity_total[complexity] * 100:.2f}%({complexity_correct[complexity]}/{complexity_total[complexity]})"
     )
-print(f"Accuracy: {sum_correct / sum_total * 100:.2f}%")
+print(f"Accuracy: {sum_correct / sum_total * 100:.2f}%({sum_correct}/{sum_total})")

@@ -30,7 +30,7 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     基本的思路是，让模型分析问题，给出回答和对应的证据
     """
     # return f"""You are a literature professor. I will provide you with the full text of a chapter from a novel along with a question. Please thoroughly analyze the chapter's content to accurately respond to the following question.\nChapter Content:{chapter_content};\nBook ends. Questions start here:\n{question_options}\nQuestions end here. Try your best to answer the question based on the given full text of the chapter. The answer should be the analysis of text content around the question with the evidence from the chapter, and the answer."""
-    prompt =  f"""
+    prompt = f"""
     You are a literature professor specializing in analyzing novels. I will provide you with the full text of a chapter from a novel and a question. Your task is to thoroughly analyze the chapter's content and provide an accurate and well-supported answer to the question.
     Please follow these rules:
     1. Base your answer only on the content of the provided chapter. Do not use information from other chapters or external sources.
