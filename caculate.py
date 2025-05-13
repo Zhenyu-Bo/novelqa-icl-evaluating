@@ -15,8 +15,8 @@ base_dir = args.base_dir
 if not os.path.exists(base_dir):
     raise ValueError(f"Directory {base_dir} does not exist.")
 
-test_aspects = ['character', 'meaning', 'times']
-test_complexity = ['dtl']
+test_aspects = ['character', 'meaning', 'times', 'all']
+test_complexity = ['dtl', 'all']
 BOOK_IDS = ["B00", "B05", "B09", "B13", "B14", "B16", "B17", "B20", "B22","B24",
             "B25", "B29", "B33", "B34", "B37", "B43", "B44", "B53", "B55", "B60"]
 
@@ -70,7 +70,7 @@ for file in sorted(os.listdir(base_dir)):
                 if "which chapter" in d["Question"].lower():
                     aspect_total["Chapter"] += 1
         if local_total != 0:
-            print(f"File: {file}, Accuracy: {local_correct / local_total * 100:.2f}%")
+            print(f"File: {file}, Accuracy: {local_correct / local_total * 100:.2f}%({local_correct}/{local_total})")
         sum_correct += local_correct
         sum_total += local_total
 

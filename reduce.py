@@ -22,14 +22,18 @@ parser.add_argument("--max_workers", type=int, default=4, help="Number of worker
 parser.add_argument("--use_cache", type=bool, default=True, help="Whether to use cache for chapter contents")
 parser.add_argument("--cache_dir", type=str, default="./cache/chapters", help="Directory to store cache files")
 parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/prompt1", help="Directory to store output files")
+parser.add_argument("--skip_answered", action="store_true", help="Skip already answered questions")
+parser.add_argument("--no_skip_answered", action="store_false", dest="skip_answered", help="Do not skip already answered questions")
+parser.set_defaults(skip_answered=True)  # 默认值为 True
 args = parser.parse_args()
+skip_answered = args.skip_answered
 
 
 NOVELQA_PATH = '../NovelQA'
 path_builder = NovelQAPathBuilder(NOVELQA_PATH)
 
 # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
-BOOK_IDS = ["B00", "B05", "B09", "B13", "B14", "B16", "B17", "B20", "B22","B24",
+BOOK_IDS = ["B00", "B05", "B09", "B13", "B14", "B16", "B17", "B20", "B22", "B24",
             "B25", "B29", "B33", "B34", "B37", "B43", "B44", "B53", "B55", "B60"]
 book_ids_to_remove = [
     "B01",  # 未实现章节切分
@@ -53,8 +57,8 @@ for book_id in book_ids_to_remove:
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 llm: LLM = get_llm('gemini', api_key=api_key)
-test_aspects = ['times', 'meaning', 'character', 'all']
-test_complexity = ['dtl', 'all']
+test_aspects = ['meaning', 'all']
+test_complexity = []
 
 # 设置日志记录
 logging.basicConfig(
@@ -64,7 +68,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",  # 时间格式
 )
 
-num2ord = inflect.engine()
 
 def question_transform(question: str, llm: LLM) -> str:
     # prompt: str = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel. However, the novel is too long, so I will give the novel chapter by chapter, and you need to transform the question for each chapter. You should make sure the user will be able to get the answer of the original question with only the answers of the transformed quesions for each chapter. Your output should only include the transformed question, and the transformed question should be wrapped in two special tokens: <answer>, </answer>. For example, if the question is '<answer>How many times has Alice mentioned in the novel?', the transformed question may be 'Is Alice mentioned in this chapter? If so, how many times has Alice mentioned in this chapter?</answer>', if the question is 'Which chapter mentions Alice.', the transformed question may be '<answer>Is Alice mentioned in this chapter?</answer>', if the question is 'When Jane Eyre met Mr. Lloyd for the first time, what's her feeling towards him?', the transformed question should be '<answer>If Jane Eyre met Mr. Lloyd in this chapter? If so, what's her feeling towards him in the first meeting?</answer>'. You should give only one best transformed question, and not output anything else.\nThe given question is {question}."""
@@ -129,7 +132,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
         if question_id in question_ids_to_remove:
             print(f"Question {question_id} removed, skipping.\n")
             continue
-        if is_answered(book_id, question_id, output_dir=output_dir):
+        if skip_answered is True and is_answered(book_id, question_id, output_dir=output_dir):
             print(f"Question {question_id} already answered, skipping.\n")
             continue
         question = question_loader.get_by_id(question_id)
@@ -153,13 +156,12 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
             prompt_chapter = build_prompt_icl(content, transformed_question)
             answer_chapter = llm.generate(prompt_chapter)
             # print(answer_chapter)
-            i_ord = num2ord.ordinal(i + 1)
-            prompt_final += f"""The answer to the {i_ord} chapter {title_desc} is: {answer_chapter}.\n"""
+            prompt_final += f"""The answer to chapter {title_desc} is: {answer_chapter}.\n"""
             chapter_answers.append(f"The answer to the chapter {title_desc} is {answer_chapter}. ")
             i += 1
         
         # print(prompt_final)
-        prompt_final += build_prompt_final(question.get_question_options())
+        prompt_final += build_prompt_final()
         answer_final = llm.generate(prompt_final)
         print(answer_final)
         llm_option = extract_option(answer_final)
@@ -208,12 +210,12 @@ def save_results_by_question(results: dict, book_id: str, question_id: str, outp
     print(f"Results saved to {outfile}")
 
 
-def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs/reduce'):
+def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs/reduce', use_cache: bool = True, cache_dir: str = './cache'):
     try:
         # 在子进程中重新初始化 llm
         api_key = os.environ.get("GEMINI_API_KEY")
         llm = get_llm(model_name, api_key=api_key)
-        reduce_test(book_id, question_id, llm, output_dir=output_dir)
+        reduce_test(book_id, question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
         return f"Book {book_id} processed successfully."
     except KeyboardInterrupt:
         # 捕获键盘中断异常，退出进程
@@ -231,28 +233,28 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
     if use_cache:
         os.makedirs(cache_dir, exist_ok=True)
-    # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
-    for book_id in tqdm(BOOK_IDS, desc="Processing books"):
-        if args.book_id != 'all' and book_id != args.book_id:
-            continue
-        results = reduce_test(book_id, args.question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
+    # # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
+    # for book_id in tqdm(BOOK_IDS, desc="Processing books"):
+    #     if args.book_id != 'all' and book_id != args.book_id:
+    #         continue
+    #     results = reduce_test(book_id, args.question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
         # save_results(results, book_id, output_dir=output_dir)
     # 设置多进程池
-    # max_workers = min(len(BOOK_IDS), args.max_workers)  # 使用 CPU 核心数或书本数中的较小值
-    # with ProcessPoolExecutor(max_workers=max_workers) as executor:
-    #     # 提交每本书的任务到进程池
-    #     futures = {
-    #         executor.submit(process_book, book_id, args.book_id, 'gemini', output_dir): book_id
-    #         for book_id in BOOK_IDS
-    #         if args.book_id == 'all' or book_id == args.book_id
-    #     }
+    max_workers = min(len(BOOK_IDS), args.max_workers)  # 使用 CPU 核心数或书本数中的较小值
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # 提交每本书的任务到进程池
+        futures = {
+            executor.submit(process_book, book_id, args.question_id, 'gemini', output_dir, use_cache, cache_dir): book_id
+            for book_id in BOOK_IDS
+            if args.book_id == 'all' or book_id == args.book_id
+        }
 
-    #     # 使用 tqdm 显示进度条
-    #     for future in tqdm(as_completed(futures), total=len(futures), desc="Processing books"):
-    #         book_id = futures[future]
-    #         try:
-    #             result = future.result()
-    #             print(result)
-    #         except Exception as e:
-    #             logging.error(f"Error processing book {book_id}: {e}", exc_info=True)
-    #             print(f"Error processing book {book_id}: {e}")
+        # 使用 tqdm 显示进度条
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing books"):
+            book_id = futures[future]
+            try:
+                result = future.result()
+                print(result)
+            except Exception as e:
+                logging.error(f"Error processing book {book_id}: {e}", exc_info=True)
+                print(f"Error processing book {book_id}: {e}")

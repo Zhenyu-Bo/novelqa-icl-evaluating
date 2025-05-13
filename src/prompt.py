@@ -9,7 +9,8 @@ def build_transform_question_prompt(question: str) -> str:
     Please follow these rules:
     1. Preserve the logical relationships (e.g., temporal, causal, comparative) in the original question, and ensure the transformed question reflects these relationships.
     2. The transformed question must be specific to a single chapter and should not require information from other chapters.
-    3. Your output must only include the transformed question, wrapped in the special tokens `<answer>` and `</answer>`.
+    3. If the question involves a sequence or time constraint (e.g., "for the first time"), ensure the transformed question asks for time or sequence-related details.
+    4. Your output must only include the transformed question, wrapped in the special tokens `<answer>` and `</answer>`.
 
     Examples:
     - Original question: "How many times has Alice been mentioned in the novel?"
@@ -17,7 +18,7 @@ def build_transform_question_prompt(question: str) -> str:
     - Original question: "Which chapter mentions Alice?"
     Your output may be: "<answer>Does this chapter mention Alice?</answer>"
     - Original question: "When Jane Eyre met Mr. Lloyd for the first time, what was her feeling towards him?"
-    Your output may be: "<answer>When Jane Eyre met Mr. Lloyd for the first time in this chapter, what was her feeling towards him?</answer>"
+    Your output may be: "<answer>Does Jane Eyre meet Mr. Lloyd in this chapter? If so, what was Jane Eyre's feelings towards Mr. Lloyd during their first meeting in this chapter? Additionally, if available, provide the context of their first meeting, including any time or sequence-related details.</answer>"
 
     The given question is: {question}.
     Now generate the transformed question.
@@ -37,11 +38,11 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     2. Your answer must include:
     - A direct response to the question.
     - Evidence from the chapter to support your answer.
-    - A brief explanation of how the evidence supports your answer.
+    - A detailed explanation of how the evidence supports your answer.
     3. Format your output as follows:
     - Answer: [Your direct response]
     - Evidence: [Relevant evidence from the chapter]
-    - Explanation: [How the evidence supports your answer]
+    - Explanation: [Describe in detail how the evidence supports your answer]
 
     Here is the chapter content:
     {chapter_content}
@@ -55,22 +56,29 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     return prompt
     
 
-def build_prompt_final(question: str) -> str:
+def build_prompt_final() -> str:
     """创建最终的提示词"""
     prompt = f"""
     Now give your analysis and then the best choice of the original question.
-    Note that you should also reexamize each answer and evidences to the transformed question rather than directly use them.
+    Note that you should also reexamine each answer and evidences to the transformed question rather than directly use them.
     Follow these steps:
     1. Carefully review the answers and evidence provided for each chapter.
-    2. Identify all relevant evidence from the chapters that supports your final answer.
-    3. Before giving your final answer, list all the evidence that supports it. For example:
+    2. For each chapter's answer and evidence:
+       - Verify whether the evidence is highly relevant to the question and directly supports the answer.
+       - If the evidence does not support the answer or is irrelevant, mark the chapter's answer as unreasonable and explain why.
+    3. Identify all relevant evidence from the chapters that supports your final answer.
+    4. Before giving your final answer, list all the evidence that supports it. For example:
     - Specify the chapter(s) where the evidence is found.
     - Provide quotes, descriptions, or specific details from the chapters that are relevant to the question.
     - Explain how each piece of evidence supports your final answer.
-    4. Based on the evidence, synthesize the information and provide a well-supported final answer.
+    5. If the question involves counting occurrences (e.g., "How many times does X appear?"), ensure that:
+    - Each piece of evidence is analyzed to determine whether it refers to a unique occurrence or the same event mentioned multiple times.
+    - Avoid double-counting the same occurrence described in different ways or contexts.
+    - Clearly explain how you determined the count based on the evidence.
+    6. Based on the evidence, synthesize the information and provide a well-supported final answer. Do not use any external knowledge, assumptions, or information not explicitly given in the provided information.
 
     At the end of your analysis, provide your final answer in the following format:
-    <answer>my final answer: A, B, C, or D</answer>
+    <answer>my final answer: A, B, C, or D</answer>, which means you need to wrap your final answer with the special tokens <answer> and </answer>.
 
     For example:
     - If your final answer is A, you should output: <answer>my final answer: A</answer>
