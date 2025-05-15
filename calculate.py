@@ -76,10 +76,20 @@ for file in sorted(os.listdir(base_dir)):
 
 print("Aspect Accuracy:")
 for aspect in aspect_correct:
+    if aspect_total[aspect] == 0:
+        continue
     print(f"{aspect}: {aspect_correct[aspect] / aspect_total[aspect] * 100:.2f}%({aspect_correct[aspect]}/{aspect_total[aspect]})")
 print("Complexity Accuracy:")
 for complexity in complexity_correct:
+    if complexity_total[complexity] == 0:
+        continue
     print(
         f"{complexity}: {complexity_correct[complexity] / complexity_total[complexity] * 100:.2f}%({complexity_correct[complexity]}/{complexity_total[complexity]})"
     )
-print(f"Accuracy: {sum_correct / sum_total * 100:.2f}%({sum_correct}/{sum_total})")
+if sum_total != 0:
+    print(f"Overall Accuracy: {sum_correct / sum_total * 100:.2f}%({sum_correct}/{sum_total})")
+else:
+    print("No data found.")
+    sum_correct = 0
+    sum_total = 0
+    print("Overall Accuracy: 0.00%(0/0)")
