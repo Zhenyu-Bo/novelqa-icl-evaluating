@@ -3,7 +3,7 @@ from src.path_builder import NovelQAPathBuilder
 from src.loader import BookLoader, QuestionLoader, BookMetaDataLoader
 from src.chapterizer import Chapterizer
 from src.extractor import extract_option
-from src.prompt import build_transform_question_prompt, build_prompt_icl, build_prompt_final
+from src.prompt import build_transform_question_prompt, build_prompt_icl, build_prompt_final, build_prompt_icl2, build_prompt_icl_json, build_prompt_final_json
 import unicodedata
 import argparse
 import os
@@ -21,7 +21,7 @@ parser.add_argument("--question_id", type=str, default="all")
 parser.add_argument("--max_workers", type=int, default=4, help="Number of worker processes to use")
 parser.add_argument("--use_cache", type=bool, default=True, help="Whether to use cache for chapter contents")
 parser.add_argument("--cache_dir", type=str, default="./cache/chapters", help="Directory to store cache files")
-parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/prompt1", help="Directory to store output files")
+parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/prompt3", help="Directory to store output files")
 parser.add_argument("--skip_answered", action="store_true", help="Skip already answered questions")
 parser.add_argument("--no_skip_answered", action="store_false", dest="skip_answered", help="Do not skip already answered questions")
 parser.set_defaults(skip_answered=True)  # 默认值为 True
@@ -57,7 +57,7 @@ for book_id in book_ids_to_remove:
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 llm: LLM = get_llm('gemini', api_key=api_key)
-test_aspects = ['meaning', 'all']
+test_aspects = ['all']
 test_complexity = []
 
 # 设置日志记录
@@ -107,7 +107,7 @@ def is_answered(book_id: str, question_id: str, output_dir: str = './outputs/red
     if os.path.exists(outfile):
         with open(outfile, 'r', encoding='utf-8') as file:
             questions = json.load(file)
-        if question_id in questions and 'ModelAnswer' in questions[question_id]:
+        if question_id in questions and 'ModelAnswer' in questions[question_id] and questions[question_id]['TransformedQuestion'] != "":
             return True
     return False
 
@@ -127,7 +127,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
     book_title = meta_data_loader.get_title(book_id)
     question_dict = question_loader.get_whole()
     for question_id, question in tqdm(question_dict.items(), desc=f"Processing questions for book {book_id}\n"):
-        if test_question_id != 'all' and question_id!= test_question_id:
+        if test_question_id != 'all' and question_id != test_question_id:
             continue
         if question_id in question_ids_to_remove:
             print(f"Question {question_id} removed, skipping.\n")
@@ -143,7 +143,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
         print(f"{question_id}: {question.get_question_options()}")
         transformed_question = question_transform(question.get_question_str(), llm)
         chapterizer = Chapterizer(book_content, book_title)
-        prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. Here is the original question: {question.get_question_options()}, and the following are the answers to the transformed question for each chapter. """
+        prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. The following are the answers to the transformed question for each chapter. """
         structure_dict, titles = get_chapter_contents_cached(chapterizer, book_id, use_cache=use_cache, cache_dir=cache_dir)  # 使用缓存函数获取章节结构数据
         chapter_answers = []
         i = 1
@@ -161,9 +161,9 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
             i += 1
         
         # print(prompt_final)
-        prompt_final += build_prompt_final()
+        prompt_final += build_prompt_final(question.get_question_options())
         answer_final = llm.generate(prompt_final)
-        print(answer_final)
+        # print(answer_final)
         llm_option = extract_option(answer_final)
         is_correct = question.get_answer() == llm_option
         
