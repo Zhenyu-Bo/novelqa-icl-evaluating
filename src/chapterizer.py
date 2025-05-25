@@ -155,6 +155,8 @@ class Chapterizer:
     @staticmethod
     def _remove_invisible_chars(s: str) -> str:
         """移除不可见字符"""
+        if not isinstance(s, str):
+            raise TypeError(f"Expected a string, but got {type(s).__name__}")
         return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
 
     def _chapterize(self):
@@ -320,11 +322,33 @@ class Chapterizer:
         structures = structure['structures']
         structure_contents = [structure['title']]
         while len(lines) > 0:
-            while len(lines) > 0 and (current_structure_idx == len(structure['structures']) or not lines[0].lower().startswith(structures[current_structure_idx]['title'].lower())):
-                structure_contents[-1] += '\n' + lines.pop(0)
-            if len(lines):
-                structure_contents.append(lines.pop(0))
-            current_structure_idx += 1
+            if current_structure_idx == len(structure['structures']):
+                # 如果当前章节结构索引已经到达最后一个章节结构，则将剩余所有lines加到structure_contents[-1]中，以\n划分
+                while len(lines) > 0:
+                    structure_contents[-1] += '\n' + lines.pop(0)
+            current_title = structures[current_structure_idx]['title']
+            title_parts = current_title.split()
+            matched_title = "" # 用于记录匹配到的标题部分
+            idx = 0
+            line = lines[0].strip()
+            while idx < len(lines) and title_parts:
+                if line.lower().startswith(title_parts[0].lower()):
+                    matched_title += title_parts.pop(0) + ' '
+                    line = line[len(matched_title):].strip()
+                    if not line:
+                        idx += 1
+                        line = lines[idx].strip() if idx < len(lines) else ''
+                else:
+                    break
+            if not title_parts:
+                # 如果标题部分全部匹配，则将当前章节标题加入结构内容
+                structure_contents.append(matched_title.strip())
+                lines[idx] = line
+                lines = lines[idx:] if idx < len(lines) else []
+                current_structure_idx += 1
+            else:
+                # 如果标题部分没有全部匹配，则将lines的第一行加入结构内容
+                structure_contents.append(lines[0])
         assert current_structure_idx == len(structures) + 1, f"{current_structure_idx} {len(structures)}, {structures}"
         structure['content'] = structure_contents[0]
         for i in range(1, len(structure_contents)):
@@ -458,7 +482,7 @@ class LLMChapterizer(Chapterizer):
         - If the content includes a table of contents (TOC), **ignore the TOC and extract chapter titles directly from the main body of the text**.
         - Do not include "Contents" or similar non-chapter headings as part of the chapter structure.
         - The title of a chapter may not explicitly contain words like "Chapter", "Part", or "Section".
-        - A chapter title may span multiple lines. For example, a title might consist of a main heading followed by a subtitle on the next line.
+        - A chapter title may span multiple lines. For example, a title might consist of a main heading followed by a subtitle on the next line. **In such cases, combine the lines into a single title by joining them with a space.**
         - You need to infer the chapter boundaries and titles based on the context and semantics of the text.
 
 
@@ -483,7 +507,8 @@ class LLMChapterizer(Chapterizer):
             Chapter 5. THE LAST OF THE STORY
             
             PART I. PARADISE LOST.
-            CHAPTER I. THE BRIDE’S MISTAKE.
+            CHAPTER I. 
+            THE BRIDE’S MISTAKE.
             “FOR after this manner in the old time the holy women also who trusted in God adorned themselves, ...”
             CHAPTER II. THE BRIDE’S THOUGHTS.
             WE had been traveling for a little more than an hour when a change passed insensibly over us both.
@@ -556,7 +581,10 @@ class LLMChapterizer(Chapterizer):
                 raise ValueError("Parsed JSON is not a list")
             
             # 构造章节结构
-            structure = {"title": self.book_title, "structures": [], "content": ""} if self.book_title else {"title": "The Book", "structures": [], "content": ""}
+            # 寻找根节点（层级为 1）
+            roots = [title for title in result if title['level'] == 1]
+            self.book_title = roots[0]['title'] if len(roots) == 1 else "The book"
+            structure = {"title": self.book_title, "structures": [], "content": ""}
             structure_stack: list[dict] = [structure]  # 存储既往章节结构
             level_stack: list[int] = [1]  # 存储既往章节层级
             # self.chapter_levels = {structure['title']: 1}  # 初始化章节级别字典
