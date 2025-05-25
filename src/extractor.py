@@ -96,6 +96,18 @@ def extract_option(answer: str) -> str:
     return match.group(1).upper()
 
 
+def split_reasoning_answer(answer: str) -> tuple[str, str]:
+    """将推理和答案分开"""
+    # 使用正则表达式匹配推理和答案
+    match = re.search(r"Reasoning:\s*(.*?)\s*Answer:\s*(.*)", answer, re.DOTALL)
+    if match:
+        reasoning = match.group(1).strip()
+        final_answer = match.group(2).strip()
+        return reasoning, final_answer
+    else:
+        return None, answer.strip()
+
+
 def merge(entries: list[dict], question_dict: dict):
     """与既有的结果合并"""
     for entry in entries:

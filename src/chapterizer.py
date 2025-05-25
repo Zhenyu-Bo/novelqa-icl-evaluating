@@ -134,20 +134,21 @@ class Chapterizer:
     ]
 
 
-    def __init__(self, book_content: str, book_title: str):
+    def __init__(self, book_content: str, book_title: str = None):
         """构造方法
         Args:
             book_content (str): 小说内容
             book_title (str): 小说标题
         """
-        # 书籍内容
+        # 书籍内容与标题
         self.book_content = book_content
+        self.book_title = book_title    
         # 章节标题字典，键为章节标题，值为章节级别，小说标题级别为1，其后章节级别依次递增
-        self.chapter_levels = {book_title: 1}
+        self.chapter_levels = {book_title: 1} if book_title is not None else {}
         # 章节标题列表，小说标题排在最前面，按出现顺序排列
-        self.chapter_titles = [book_title]
+        self.chapter_titles = [book_title] if book_title is not None else []
         # 章节结构字典，存储标题、内容、子章节，其中内容不包含子章节的内容
-        self.structure = {'title': book_title, 'structures': [], 'content': ''}
+        self.structure = {'title': book_title, 'structures': [], 'content': ''} if book_title is not None else {'title': 'The Book', 'structures': [], 'content': ''}
         # 章节化
         self._chapterize()
 
@@ -415,3 +416,214 @@ class Chapterizer:
             level = self.chapter_levels[title]
             markdown += "#" * level + " " + title + "\n"
         return markdown
+
+
+from .llm import LLM
+import json
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+class LLMChapterizer(Chapterizer):
+    """章节化类, 使用LLM进行章节化
+    Args:
+        Chapterizer (Chapterizer): 章节化类
+    """
+    def __init__(self, llm: LLM, book_content: str, book_title: str = None):
+        self.llm = llm
+        super().__init__(book_content, book_title)
+        
+    def _chapterize(self, chunk_size: int = 1000000, chunk_overlap: int = 10000):
+        lines = self.book_content.split('\n')
+        lines = [self._remove_invisible_chars(line) for line in lines if line.strip()]
+        # lines = self._ignore_toc(lines)
+        structure = self.generate_chapter_structure(lines)
+        # structure = self.generate_chapter_contents_chunk_by_chunk(chunk_size = chunk_size, chunk_overlap = chunk_overlap)
+
+        # 递归方法，用于遍历章节结构并生成 chapter_levels 和 chapter_titles
+        def traverse_structure(structure, level):
+            title = structure['title']
+            self.chapter_levels[title] = level
+            self.chapter_titles.append(title)
+            for substructure in structure.get('structures', []):
+                traverse_structure(substructure, level + 1)
+
+        # 从根结构开始递归
+        traverse_structure(structure, 1)
+        
+    def set_prompt(self, content: str) -> str:
+        """设置让 LLM 进行章节切分的提示词"""
+        prompt = f"""
+        You are a helpful assistant. I will provide you with the content of a novel. Your task is to identify the chapters and their levels.
+        Return the result as a structured JSON object where each chapter has a title and its level(1 for the main title, 2 for the first level, etc.).
+        
+        Note:
+        - If the content includes a table of contents (TOC), **ignore the TOC and extract chapter titles directly from the main body of the text**.
+        - Do not include "Contents" or similar non-chapter headings as part of the chapter structure.
+        - The title of a chapter may not explicitly contain words like "Chapter", "Part", or "Section".
+        - A chapter title may span multiple lines. For example, a title might consist of a main heading followed by a subtitle on the next line.
+        - You need to infer the chapter boundaries and titles based on the context and semantics of the text.
+
+
+        Here is the content of the novel: {content}
+
+        Please provide the chapter structure in the following format:
+        [
+            {{"title": "[the title of the chapter1]", "level": [the level of the chapter1]}},
+            {{"title": "[he title of the chapter2]", "level": [he title of the chapter2]}},
+            ...
+        ]
+        For example, if the content is:
+        "
+            THE LAW AND THE LADY
+            by Wilkie Collins
+            
+            Contents:
+            Chapter 1. THE BRIDE’S MISTAKE
+            Chapter 2. THE BRIDE’S THOUGHTS
+            Chapter 3. THE STORY OF THE TRIAL. THE PRELIMINARIES
+            Chapter 4. FIRST QUESTION--DID THE WOMAN DIE POISONED?
+            Chapter 5. THE LAST OF THE STORY
+            
+            PART I. PARADISE LOST.
+            CHAPTER I. THE BRIDE’S MISTAKE.
+            “FOR after this manner in the old time the holy women also who trusted in God adorned themselves, ...”
+            CHAPTER II. THE BRIDE’S THOUGHTS.
+            WE had been traveling for a little more than an hour when a change passed insensibly over us both.
+            PART II. PARADISE REGAINED.
+            CHAPTER III. THE STORY OF THE TRIAL. THE PRELIMINARIES.
+            LET me confess another weakness, on my part, before I begin the Story of the Trial ...
+            CHAPTER IV. FIRST QUESTION--DID THE WOMAN DIE POISONED?
+            THE proceedings began at ten o’clock. The prisoner was placed at the Bar, ...
+            CHAPTER V.
+            THE LAST OF THE STORY.
+            In ten days more we returned to England, accompanied by Benjamin. ...
+        "
+        Your output should be:
+        "
+        [
+            {{"title": "THE LAW AND THE LADY", "level": 1}},
+            {{"title": "PART I. PARADISE LOST.", "level": 2}},
+            {{"title": "CHAPTER I. THE BRIDE’S MISTAKE.", "level": 3}},
+            {{"title": "CHAPTER II. THE BRIDE’S THOUGHTS.", "level": 3}},
+            {{"title": "PART II. PARADISE REGAINED.", "level": 2}},
+            {{"title": "CHAPTER III. THE STORY OF THE TRIAL. THE PRELIMINARIES.", "level": 3}},
+            {{"title": "CHAPTER IV. FIRST QUESTION--DID THE WOMAN DIE POISONED?", "level": 3}},
+            {{"title": "CHAPTER V. THE LAST OF THE STORY.", "level": 3}},
+        ]"
+        
+        Now please provide the chapter structure for the given content.
+        """
+        
+        return prompt
+        
+    
+    def set_merge_prompt(self, structures: list[dict]) -> str:
+        """设置让 LLM 合并章节的提示词"""
+        prompt = f"""
+        You are a helpful assistant. I will provide you with a list of chapter structures generated from different parts of a novel. 
+        Your task is to merge these chapter structures into a single unified structure, ensuring there are no duplicate chapters across different parts.
+
+        Here is the list of chapter structures: {json.dumps(structures, ensure_ascii=False)}
+
+        Please provide the merged chapter structure in the following format:
+        [
+            {{"title": "[the title of the chapter1]", "level": [the level of the chapter1]}},
+            {{"title": "[the title of the chapter2]", "level": [the level of the chapter2]}},
+            ...
+        ]
+
+        Note:
+        - The chapter structures are generated from different parts of the novel, and the chapter level standards may vary between parts. When merging, ensure that the chapter levels are unified and consistent across the entire structure.
+        - If two or more chapters have the same title and level, they should be merged into a single chapter in the final structure.
+        - The order of chapters should be preserved as much as possible based on their appearance in the input structures.
+        - Ensure that the final structure is a valid JSON array and follows the specified format.
+        
+        Now please provide the merged chapter structure for the given list of chapter structures.
+        """
+        
+        return prompt
+    
+    def _parse_chapter_structure(self, response: str) -> dict:
+        """解析 LLM 的输出"""
+        try:
+            # 匹配 JSON 数组
+            match = re.search(r'\[.*?\]', response, re.DOTALL)
+            if not match:
+                raise ValueError("LLM response does not contain a valid JSON array")
+            response = match.group(0)  # 提取匹配到的 JSON 数组
+
+            # 解析 JSON
+            result = json.loads(response)
+            if not isinstance(result, list):
+                raise ValueError("Parsed JSON is not a list")
+            
+            # 构造章节结构
+            structure = {"title": self.book_title, "structures": [], "content": ""} if self.book_title else {"title": "The Book", "structures": [], "content": ""}
+            structure_stack: list[dict] = [structure]  # 存储既往章节结构
+            level_stack: list[int] = [1]  # 存储既往章节层级
+            # self.chapter_levels = {structure['title']: 1}  # 初始化章节级别字典
+            # self.chapter_titles = [structure['title']]  # 初始化章节标题列表
+
+            for item in result:
+                title = item['title']
+                level = item['level']
+                
+                if level <= 1:
+                    # 只有根节点（书籍标题）的层级为 1
+                    continue
+
+                # 如果当前章节的层级小于栈顶的层级，弹出栈顶
+                while level <= level_stack[-1]:
+                    pop_structure = structure_stack.pop()
+                    structure_stack[-1]['structures'].append(pop_structure)  # 将弹出的章节添加到父章节的 structures 中
+                    level_stack.pop()
+                
+                level_stack.append(level)
+                structure_stack.append({"title": title, "structures": [], "content": ""})  # 将新章节压入栈中
+                # self.chapter_levels[title] = level  # 更新章节级别
+                # self.chapter_titles.append(title)  # 添加章节标题到列表中
+
+            while len(structure_stack) > 1:
+                pop_structure = structure_stack.pop()
+                structure_stack[-1]['structures'].append(pop_structure)
+
+            return structure
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON: {e}")
+    
+    
+    def generate_chapter_structure(self, content: str = None) -> dict:
+        """调用 LLM 生成章节结构"""
+        prompt = self.set_prompt(content) if content else self.set_prompt(self.book_content)
+        response = self.llm.generate(prompt)
+        response = self._remove_invisible_chars(response)
+        print("LLM response:", response)
+        # 解析 LLM 的输出
+        structure = self._parse_chapter_structure(response)
+        print(json.dumps(structure, indent=2, ensure_ascii=False))
+        return structure
+
+    def generate_chapter_contents_chunk_by_chunk(self, chunk_size: int = 1000000, chunk_overlap: int = 10000) -> list[dict]:
+        """使用 LLM 生成章节内容，分块处理
+        Args:
+            chunk_size (int): 每个块的大小，默认 1000000 字符
+            chunk_overlap (int): 块之间的重叠部分，默认 10000 字符
+        Returns:
+            list[str]: 章节内容列表
+        """
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        chunks = text_splitter.split_text(self.book_content)
+        print(f"Total chunks: {len(chunks)}")
+        structures = ""
+        for chunk in chunks:
+            structure = self.generate_chapter_structure(chunk)
+            print(json.dumps(structure, indent=2, ensure_ascii=False))
+            structures += json.dumps(structure, ensure_ascii=False) + "\n"
+        structures = structures.strip().split('\n')
+        # 合并章节结构
+        prompt = self.set_merge_prompt(structures)
+        response = self.llm.generate(prompt)
+        response = self._remove_invisible_chars(response)
+        print("LLM merge response:", response)
+        # 解析 LLM 的输出
+        merged_structure = self._parse_chapter_structure(response)
+        print(json.dumps(merged_structure, indent=2, ensure_ascii=False))
+        return merged_structure
