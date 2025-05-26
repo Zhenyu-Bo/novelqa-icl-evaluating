@@ -156,8 +156,20 @@ class Chapterizer:
     def _remove_invisible_chars(s: str) -> str:
         """移除不可见字符"""
         if not isinstance(s, str):
-            raise TypeError(f"Expected a string, but got {type(s).__name__}")
+            print(f"Warning: {s} is not a string, type: {type(s)}")
+            return None
         return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
+    
+    @staticmethod
+    def _remove_invalid_chars(s: str) -> str:
+        """移除 windows 文件名非法字符以及其他不方便识别的字符"""
+        if not isinstance(s, str):
+            print(f"Warning: {s} is not a string, type: {type(s)}")
+            return None
+        invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '.', '\n', '\r']
+        for char in invalid_chars:
+            s = s.replace(char, '')
+        return s
 
     def _chapterize(self):
         """章节化"""
@@ -326,21 +338,34 @@ class Chapterizer:
                 # 如果当前章节结构索引已经到达最后一个章节结构，则将剩余所有lines加到structure_contents[-1]中，以\n划分
                 while len(lines) > 0:
                     structure_contents[-1] += '\n' + lines.pop(0)
-            current_title = structures[current_structure_idx]['title']
+                current_structure_idx += 1
+                continue
+            current_title = Chapterizer._remove_invalid_chars(structures[current_structure_idx]['title'])
             title_parts = current_title.split()
             matched_title = "" # 用于记录匹配到的标题部分
             idx = 0
-            line = lines[0].strip()
+            line = Chapterizer._remove_invalid_chars(lines[0].strip())
+            # print(line)
             while idx < len(lines) and title_parts:
+                if current_title.lower() in line.lower():
+                    # 如果当前行包含完整的标题，则可以直接匹配
+                    title_parts = []
+                    matched_title = current_title
+                    idx += 1
+                    line = Chapterizer._remove_invalid_chars(lines[idx].strip()) if idx < len(lines) else ''
+                    break
                 if line.lower().startswith(title_parts[0].lower()):
-                    matched_title += title_parts.pop(0) + ' '
-                    line = line[len(matched_title):].strip()
+                    # print(title_parts[0])
+                    matched_title += title_parts[0] + ' '
+                    line = line[len(title_parts[0]):].strip()
+                    title_parts.pop(0)
                     if not line:
                         idx += 1
-                        line = lines[idx].strip() if idx < len(lines) else ''
+                        line = Chapterizer._remove_invalid_chars(lines[idx].strip()) if idx < len(lines) else ''
                 else:
                     break
             if not title_parts:
+                # print("Matched title:", matched_title.strip())
                 # 如果标题部分全部匹配，则将当前章节标题加入结构内容
                 structure_contents.append(matched_title.strip())
                 lines[idx] = line
@@ -348,7 +373,8 @@ class Chapterizer:
                 current_structure_idx += 1
             else:
                 # 如果标题部分没有全部匹配，则将lines的第一行加入结构内容
-                structure_contents.append(lines[0])
+                structure_contents[-1] += '\n' + lines.pop(0).strip()
+        # print("Current structure index:", current_structure_idx)
         assert current_structure_idx == len(structures) + 1, f"{current_structure_idx} {len(structures)}, {structures}"
         structure['content'] = structure_contents[0]
         for i in range(1, len(structure_contents)):
@@ -418,7 +444,14 @@ class Chapterizer:
                 get_chapter_content(substructure, current_key + '_' + substructure['title'], current_level + 1)
             return
         get_chapter_content(self.structure, self.chapter_titles[0], 1)
-        return result_dict, result_list
+        chapter_dict = {}
+        chapter_list = []
+        for chapter in result_list:
+            chapter_safe = Chapterizer._remove_invalid_chars(chapter)  # 清理非法字符
+            chapter_dict[chapter_safe] = result_dict[chapter]  # 更新键值对
+            chapter_list.append(chapter_safe)  # 更新章节标题列表
+        # return result_dict, result_list
+        return chapter_dict, result_list
 
     @staticmethod
     def _get_structure_content(structure: dict) -> str:
@@ -460,7 +493,8 @@ class LLMChapterizer(Chapterizer):
         # lines = self._ignore_toc(lines)
         structure = self.generate_chapter_structure(lines)
         # structure = self.generate_chapter_contents_chunk_by_chunk(chunk_size = chunk_size, chunk_overlap = chunk_overlap)
-
+        print(json.dumps(structure, indent=2, ensure_ascii=False))
+        
         # 递归方法，用于遍历章节结构并生成 chapter_levels 和 chapter_titles
         def traverse_structure(structure, level):
             title = structure['title']
@@ -483,8 +517,9 @@ class LLMChapterizer(Chapterizer):
         - Do not include "Contents" or similar non-chapter headings as part of the chapter structure.
         - The title of a chapter may not explicitly contain words like "Chapter", "Part", or "Section".
         - A chapter title may span multiple lines. For example, a title might consist of a main heading followed by a subtitle on the next line. **In such cases, combine the lines into a single title by joining them with a space.**
+        - **Ensure that the chapter titles in your output exactly match the original text, including all characters, punctuation marks (e.g., ".", "-", ":", etc.), and formatting. Do not modify or normalize the titles.**
         - You need to infer the chapter boundaries and titles based on the context and semantics of the text.
-
+        - **If a chapter title is too simple (e.g., a single number or word), include the first sentence or phrase following the title as part of the title to make it more identifiable.**
 
         Here is the content of the novel: {content}
 
@@ -513,7 +548,7 @@ class LLMChapterizer(Chapterizer):
             CHAPTER II. THE BRIDE’S THOUGHTS.
             WE had been traveling for a little more than an hour when a change passed insensibly over us both.
             PART II. PARADISE REGAINED.
-            CHAPTER III. THE STORY OF THE TRIAL. THE PRELIMINARIES.
+            CHAPTER III THE STORY OF THE TRIAL. THE PRELIMINARIES.
             LET me confess another weakness, on my part, before I begin the Story of the Trial ...
             CHAPTER IV. FIRST QUESTION--DID THE WOMAN DIE POISONED?
             THE proceedings began at ten o’clock. The prisoner was placed at the Bar, ...
@@ -529,7 +564,7 @@ class LLMChapterizer(Chapterizer):
             {{"title": "CHAPTER I. THE BRIDE’S MISTAKE.", "level": 3}},
             {{"title": "CHAPTER II. THE BRIDE’S THOUGHTS.", "level": 3}},
             {{"title": "PART II. PARADISE REGAINED.", "level": 2}},
-            {{"title": "CHAPTER III. THE STORY OF THE TRIAL. THE PRELIMINARIES.", "level": 3}},
+            {{"title": "CHAPTER III THE STORY OF THE TRIAL. THE PRELIMINARIES.", "level": 3}},
             {{"title": "CHAPTER IV. FIRST QUESTION--DID THE WOMAN DIE POISONED?", "level": 3}},
             {{"title": "CHAPTER V. THE LAST OF THE STORY.", "level": 3}},
         ]"
@@ -591,7 +626,7 @@ class LLMChapterizer(Chapterizer):
             # self.chapter_titles = [structure['title']]  # 初始化章节标题列表
 
             for item in result:
-                title = item['title']
+                title = LLMChapterizer._remove_invalid_chars(item['title'].strip())  # 清理标题
                 level = item['level']
                 
                 if level <= 1:
@@ -622,11 +657,14 @@ class LLMChapterizer(Chapterizer):
         """调用 LLM 生成章节结构"""
         prompt = self.set_prompt(content) if content else self.set_prompt(self.book_content)
         response = self.llm.generate(prompt)
+        if response is None or response.strip() == "":
+            raise ValueError("LLM response is empty or None, please check the LLM configuration or input content.")
+        print("LLM response:")
+        print(response)
         response = self._remove_invisible_chars(response)
-        print("LLM response:", response)
+        # print("LLM response:", response)
         # 解析 LLM 的输出
         structure = self._parse_chapter_structure(response)
-        print(json.dumps(structure, indent=2, ensure_ascii=False))
         return structure
 
     def generate_chapter_contents_chunk_by_chunk(self, chunk_size: int = 1000000, chunk_overlap: int = 10000) -> list[dict]:
@@ -649,9 +687,278 @@ class LLMChapterizer(Chapterizer):
         # 合并章节结构
         prompt = self.set_merge_prompt(structures)
         response = self.llm.generate(prompt)
+        print("LLM merge response:")
+        print(response)
+        if response is None or response.strip() == "":
+            raise ValueError("LLM response is empty or None, please check the LLM configuration or input content.")
         response = self._remove_invisible_chars(response)
-        print("LLM merge response:", response)
         # 解析 LLM 的输出
         merged_structure = self._parse_chapter_structure(response)
-        print(json.dumps(merged_structure, indent=2, ensure_ascii=False))
+        # print(json.dumps(merged_structure, indent=2, ensure_ascii=False))
         return merged_structure
+    
+
+import tiktoken
+class LLMSpliter():
+    """使用 LLM 将书本内容按语义切分为 chunks """
+    def __init__(self, llm: LLM, book_content: str, chunk_tokens=50000, max_llm_tokens=600000, chunk_overlap=2000):
+        self.llm = llm
+        self.book_content = book_content
+        self.chunk_tokens = chunk_tokens  # 切分后每个块的大小上限
+        self.max_llm_tokens = max_llm_tokens  # LLM 上下文窗口大小限制
+        self.chunks = []
+        self.token_counter = tiktoken.get_encoding("cl100k_base")
+        self.tokens_num = len(self.token_counter.encode(book_content))  # 计算书本内容的 token 数量
+        print(f"Book content token count: {self.tokens_num}")
+    
+    def set_prompt_directly(self, content: str) -> str:
+        """设置让 LLM 直接输出分块内容的提示词"""
+        prompt = f"""
+        You are a professional text processing assistant. Please divide the following text into multiple chunks based on semantic coherence.
+
+        Requirements:
+        1. Each chunk should be semantically coherent, representing a complete part of the story or content.
+        2. The token count of each chunk must not exceed {self.chunk_tokens} tokens. However, if necessary to maintain semantic coherence, the token count may slightly exceed this limit.
+        3. Prefer splitting at chapter boundaries or paragraph boundaries.
+        4. Ensure each chunk is semantically complete and does not split in the middle of a sentence.
+        5. The length of each chunk should be relatively balanced, but semantic coherence is more important.
+        
+        Please return the chunked results in the following JSON format:
+        {{
+            "chunks": [
+                "Content of the first chunk",
+                "Content of the second chunk",
+                ...
+            ]
+        }}
+
+        Here is the text to be divided:
+
+        {content}
+        """
+        return prompt
+    
+    def set_prompt_boundaries(self, content: str) -> str:
+        """设置让 LLM 输出分块边界的提示词"""
+        prompt = f"""
+        You are a professional text processing assistant. Please identify the semantic chunk boundaries in the following text.
+
+        Requirements:
+        1. Each chunk should be semantically coherent, representing a complete part of the story or content.
+        2. The token count of each chunk must not exceed {self.chunk_tokens} tokens. However, if necessary to maintain semantic coherence, the token count may slightly exceed this limit.
+        3. Prefer marking chunk boundaries at chapter boundaries or paragraph boundaries.
+        4. Chunk boundaries must be complete sentences or paragraphs that exist in the original text.
+        5. The length of each chunk should be relatively balanced, but semantic coherence is more important.
+
+        Note:
+        - The boundary text must match the original text exactly, including punctuation, spaces, line breaks, and other special characters.
+        - Ensure that the boundary text is extracted verbatim from the original text to allow accurate location in the original document.
+
+        Please return only the chunk boundaries (the ending sentence of each chunk) in the following format:
+        {{
+            "boundaries": [
+                "The last sentence of the first chunk (must match the original text exactly)",
+                "The last sentence of the second chunk (must match the original text exactly)",
+                ...
+            ]
+        }}
+
+        Here is the text to be divided:
+
+        {content}
+        """
+        return prompt
+    
+    def generate_chunks_directly(self) -> list[str]:
+        """让 LLM 直接输出分块内容，并返回结果"""
+        # 如果文本超过 LLM 处理上限，先进行分块
+        if self.tokens_num > self.max_llm_tokens:
+            return self._process_long_document_directly()
+        
+        # 文档长度在 LLM 处理范围内，直接处理
+        prompt = self.set_prompt_directly(self.book_content)
+        response = self.llm.generate(prompt)
+        
+        if not response:
+            raise ValueError("LLM 返回空响应，请检查配置或输入内容")
+        
+        try:
+            # 尝试从响应中提取 JSON
+            import re
+            import json
+            
+            # 查找 JSON 对象
+            match = re.search(r'\{[\s\S]*?\}', response)
+            if not match:
+                raise ValueError("未能在LLM响应中找到有效的JSON对象")
+            
+            json_str = match.group(0)
+            result = json.loads(json_str)
+            
+            if not isinstance(result, dict) or "chunks" not in result:
+                raise ValueError("LLM响应中的JSON格式不正确，未找到'chunks'字段")
+            
+            self.chunks = result["chunks"]
+            return self.chunks
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"解析LLM响应失败: {e}")
+    
+    def generate_chunks_by_boundaries(self) -> list[str]:
+        """让 LLM 输出分块边界，然后在原文中切分，返回分块结果"""
+        # 如果文本超过 LLM 处理上限，先进行分块
+        if self.tokens_num > self.max_llm_tokens:
+            return self._process_long_document_by_boundaries()
+        
+        # 文档长度在 LLM 处理范围内，直接处理
+        prompt = self.set_prompt_boundaries(self.book_content)
+        response = self.llm.generate(prompt)
+        print("LLM response:")
+        print(response)
+        
+        if not response:
+            raise ValueError("LLM 返回空响应，请检查配置或输入内容")
+        
+        try:
+            # 尝试从响应中提取 JSON
+            import re
+            import json
+            
+            # 查找 JSON 对象
+            match = re.search(r'\{[\s\S]*?\}', response)
+            if not match:
+                raise ValueError("未能在LLM响应中找到有效的JSON对象")
+            
+            json_str = match.group(0)
+            result = json.loads(json_str)
+            
+            if not isinstance(result, dict) or "boundaries" not in result:
+                raise ValueError("LLM响应中的JSON格式不正确，未找到'boundaries'字段")
+            
+            # 根据边界在原文中切分
+            boundaries = result["boundaries"]
+            return self._split_by_boundaries(self.book_content, boundaries)
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"解析LLM响应失败: {e}")
+    
+    def _split_by_boundaries(self, text: str, boundaries: list[str]) -> list[str]:
+        """根据边界在原文中切分"""
+        chunks = []
+        remaining_text = text.replace('\n', ' ').strip()  # 替换换行符并去除首尾空格
+        
+        for boundary in boundaries:
+            print(f"Processing boundary: {boundary}")
+            # 确保边界文本存在于原文中
+            if boundary not in remaining_text:
+                print(f"Boundary '{boundary}' not found in remaining text, skipping.")
+                continue
+                
+            # 找到边界位置
+            split_pos = remaining_text.find(boundary) + len(boundary)
+            
+            # 切分文本
+            chunk = remaining_text[:split_pos]
+            chunks.append(chunk)
+            
+            # 更新剩余文本
+            remaining_text = remaining_text[split_pos:]
+        
+        # 添加最后一块
+        if remaining_text.strip():
+            chunks.append(remaining_text)
+        
+        self.chunks = chunks
+        return chunks
+    
+    def _process_long_document_directly(self) -> list[str]:
+        """处理超长文档 - 直接输出方式"""
+        # 使用简单的字符分割先将文档切成较小的块
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_llm_tokens * 4,  # 留出一些空间给提示词和回复
+            chunk_overlap=self.chunk_overlap,
+            length_function=len
+        )
+        initial_chunks = text_splitter.split_text(self.book_content)
+        
+        all_chunks = []
+        for chunk in initial_chunks:
+            prompt = self.set_prompt_directly(chunk)
+            response = self.llm.generate(prompt)
+            
+            if not response:
+                continue
+            
+            try:
+                match = re.search(r'\{[\s\S]*?\}', response)
+                if not match:
+                    continue
+                
+                json_str = match.group(0)
+                result = json.loads(json_str)
+                
+                if isinstance(result, dict) and "chunks" in result:
+                    all_chunks.extend(result["chunks"])
+            except:
+                continue
+        
+        self.chunks = all_chunks
+        return all_chunks
+    
+    def _process_long_document_by_boundaries(self) -> list[str]:
+        """处理超长文档 - 边界切分方式"""
+        # 使用简单的字符分割先将文档切成较小的块
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_llm_tokens * 3,
+            chunk_overlap=self.chunk_overlap,
+            length_function=len
+        )
+        initial_chunks = text_splitter.split_text(self.book_content)
+        
+        all_boundaries = []
+        for i, chunk in enumerate(initial_chunks):
+            # 最后一块不需要找边界
+            if i == len(initial_chunks) - 1:
+                continue
+                
+            prompt = self.set_prompt_boundaries(chunk)
+            response = self.llm.generate(prompt)
+            
+            if not response:
+                continue
+            
+            try:
+                match = re.search(r'\{[\s\S]*?\}', response)
+                if not match:
+                    continue
+                
+                json_str = match.group(0)
+                result = json.loads(json_str)
+                
+                if isinstance(result, dict) and "boundaries" in result:
+                    # 只取最后一个边界，作为当前块的结束
+                    if result["boundaries"]:
+                        all_boundaries.append(result["boundaries"][-1])
+            except:
+                continue
+        
+        # 根据所有收集到的边界切分原始文本
+        return self._split_by_boundaries(self.book_content, all_boundaries)
+    
+    def save_chunks(self, output_dir: str, prefix: str = "chunk_") -> None:
+        """保存切分后的块到文件"""
+        import os
+        
+        if not self.chunks:
+            raise ValueError("没有可保存的文本块，请先运行切分方法")
+        
+        # 确保输出目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 保存每个块到单独的文件
+        for i, chunk in enumerate(self.chunks):
+            file_path = os.path.join(output_dir, f"{prefix}{i+1}.txt")
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(chunk)
+        
+        print(f"已将{len(self.chunks)}个文本块保存到 {output_dir} 目录")
