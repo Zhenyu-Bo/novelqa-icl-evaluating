@@ -906,6 +906,7 @@ class LLMChapterizer(Chapterizer):
     def _parse_chapter_structure(self, response: str) -> dict:
         """解析 LLM 的输出"""
         try:
+            response = self._remove_invisible_chars(response)
             # 提取 JSON 数组
             json_match = re.search(r'\[[\s\S]*\]', response)
             if not json_match:
@@ -1031,8 +1032,10 @@ class LLMChapterizer(Chapterizer):
                     print(f"Warning: Empty response for chunk {i+1}")
                     continue
                 
+                response = self._remove_invisible_chars(response)
+                
                 # 提取 JSON
-                json_match = re.search(r'\[[\s\S]*?\]', response)
+                json_match = re.search(r'\[[\s\S]*\]', response)
                 if json_match:
                     chunk_structure = json.loads(json_match.group(0))
                     if chunk_structure:  # 只添加非空结构
@@ -1141,6 +1144,14 @@ class LLMSplitter():
         text = re.sub(r'\s+', ' ', text).strip()
         return text
     
+    @staticmethod
+    def _remove_invisible_chars(s: str) -> str:
+        """移除不可见字符"""
+        if not isinstance(s, str):
+            print(f"Warning: {s} is not a string, type: {type(s)}")
+            return None
+        return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
+    
     def set_prompt_directly(self, content: str) -> str:
         """设置让 LLM 直接输出分块内容的提示词"""
         prompt = f"""
@@ -1178,21 +1189,23 @@ class LLMSplitter():
         Requirements:
         1. Each chunk should be semantically coherent, representing a complete part of the story or content.
         2. The token count of each chunk (based on the provided, processed text) must not exceed {self.chunk_tokens} tokens. Slight deviations are acceptable if necessary to maintain semantic coherence.
-        3. Prefer marking chunk boundaries at natural breaks in the text, such as the end of paragraphs or significant topic shifts, as they appear in the processed text.
-        4. Chunk boundaries MUST be EXACT VERBATIM SUBSTRINGS of the provided 'Text to be divided' below.
-        5. The length of each chunk should be relatively balanced, but semantic coherence is more important.
+        3. IMPORTANT: Mark chunk boundaries at the BEGINNING of new semantic sections, not at the end of previous sections.
+        4. Prefer using chapter titles, section headings, or other natural starting points as boundaries.
+        5. Chunk boundaries MUST be EXACT VERBATIM SUBSTRINGS of the provided 'Text to be divided' below.
+        6. The length of each chunk should be relatively balanced, but semantic coherence is more important.
 
         CRITICALLY IMPORTANT - Adhere to these rules for boundary text:
         - The boundary text you return MUST be an EXACT character-for-character match from the 'Text to be divided'.
         - Do NOT add, remove, or change ANY characters, including punctuation or spacing, from how it appears in the provided text.
         - Do NOT attempt to reconstruct or infer original formatting (like newlines) that is NOT present in the input text.
         - Ensure the boundary string itself does not have any leading or trailing whitespace beyond what is part of the exact match in the provided text.
+        - Always favor chapter titles, section headings, or paragraph beginnings as boundaries.
 
-        Please return only the chunk boundaries (the ending sentence or phrase of each chunk) in the following JSON format:
+        Please return only the chunk boundaries (the BEGINNING sentence or phrase of each chunk) in the following JSON format:
         {{
             "boundaries": [
-                "Exact verbatim ending phrase of the first chunk, copied precisely from the provided text",
-                "Exact verbatim ending phrase of the second chunk, copied precisely from the provided text",
+                "Exact verbatim BEGINNING phrase of the first chunk, copied precisely from the provided text",
+                "Exact verbatim BEGINNING phrase of the second chunk, copied precisely from the provided text",
                 ...
             ]
         }}
@@ -1218,13 +1231,15 @@ class LLMSplitter():
         if not response:
             raise ValueError("LLM 返回空响应，请检查配置或输入内容")
         
+        response = self._remove_invisible_chars(response)
+        
         try:
             # 尝试从响应中提取 JSON
             import re
             import json
             
             # 查找 JSON 对象
-            match = re.search(r'\{[\s\S]*?\}', response)
+            match = re.search(r'\{[\s\S]*\}', response)
             if not match:
                 raise ValueError("未能在LLM响应中找到有效的JSON对象")
             
@@ -1261,13 +1276,12 @@ class LLMSplitter():
                     print(f"LLM 返回空响应，第 {attempt + 1} 次重试")
                     continue  # 重试
                 
+                response = self._remove_invisible_chars(response)
+                
                 try:
                     # 尝试从响应中提取 JSON
-                    import re
-                    import json
-                    
                     # 查找 JSON 对象
-                    match = re.search(r'\{[\s\S]*?\}', response)
+                    match = re.search(r'\{[\s\S]*\}', response)
                     if not match:
                         raise ValueError("未能在LLM响应中找到有效的JSON对象")
                     
@@ -1303,7 +1317,7 @@ class LLMSplitter():
             # boundary = re.sub(r'\s+', ' ', raw_boundary).strip()
             boundary = LLMSplitter._normalize_text(raw_boundary)
             if len(boundary) > 100:
-                boundary = boundary[-100:]  # 只取最后100个字符，避免过长的边界
+                boundary = boundary[:100]  # 只取前100个字符，避免过长的边界影响查找
             
             print(f"Processing boundary (raw from LLM): '{raw_boundary}'")
             print(f"Processing boundary (normalized): '{boundary}'")
@@ -1350,8 +1364,10 @@ class LLMSplitter():
             if not response:
                 continue
             
+            response = self._remove_invisible_chars(response)
+            
             try:
-                match = re.search(r'\{[\s\S]*?\}', response)
+                match = re.search(r'\{[\s\S]*\}', response)
                 if not match:
                     continue
                 
@@ -1383,8 +1399,10 @@ class LLMSplitter():
             if not response:
                 continue
             
+            response = self._remove_invisible_chars(response)
+            
             try:
-                match = re.search(r'\{[\s\S]*?\}', response)
+                match = re.search(r'\{[\s\S]*\}', response)
                 if not match:
                     continue
                 
@@ -1524,6 +1542,7 @@ class LLMSplitter():
         if not response or not response.strip():
             return None
         
+        response = self._remove_invisible_chars(response)
         try:
             # 查找 JSON 对象
             json_match = re.search(r'\{[\s\S]*\}', response)
@@ -1552,7 +1571,7 @@ class LLMSplitter():
                     item["title"].strip()):
                     valid_titles.append({
                         "title": str(item["title"]),
-                    "level": int(item["level"])
+                        "level": int(item["level"])
                     })
             
             return valid_titles
@@ -1593,6 +1612,66 @@ class LLMSplitter():
         
         return highest_level_titles
     
+    def set_prompt_merge_chapter_titles(self, chunk_chapter_data: list[list[dict]]) -> str:
+        """设置让 LLM 合并和统一章节标题等级的提示词"""
+        prompt = f"""
+        You are a professional text processing assistant. I will provide you with multiple chapter title arrays extracted from different parts of a novel. Your task is to merge them into a single unified structure with consistent level assignments.
+
+        CRITICAL REQUIREMENTS:
+        1. Preserve ALL chapter titles EXACTLY as they appear in the input
+        2. Do NOT modify titles in any way - keep original formatting, punctuation, spacing, line breaks
+        3. Keep the original order of titles
+        4. Standardize and unify the level assignments across all chunks
+        5. Use exact string matching for duplicate detection
+
+        Chapter title data from different chunks:
+        {json.dumps(chunk_chapter_data, ensure_ascii=False, indent=2)}
+
+        Requirements for merging and level standardization:
+        1. Remove duplicate chapter titles that appear in multiple chunks (using exact title matching)
+        2. Maintain the correct chronological order of chapters
+        3. STANDARDIZE LEVEL ASSIGNMENTS: Ensure consistent hierarchy across the entire document
+        - Level 1: Book title/main title (if any)
+        - Level 2: Part/Section titles (e.g., "Part I", "Book One", "Volume I")
+        - Level 3: Main chapter titles (e.g., "Chapter 1", "Chapter I")
+        - Level 4+: Sub-chapters or sections within chapters
+        4. Handle overlapping content from chunk boundaries
+        5. Preserve the original formatting of all titles EXACTLY
+        6. Resolve level inconsistencies by analyzing title patterns and content structure
+
+        Level Standardization Rules:
+        - If the same title appears with different levels in different chunks, choose the most appropriate level based on the overall document structure
+        - Consider title patterns (e.g., "Chapter", "Part", "Book", "Volume") to determine appropriate levels
+        - Ensure hierarchical consistency (parent levels should be lower numbers than child levels)
+        - Maintain semantic relationships between titles
+
+        Chapter title patterns to consider for level assignment:
+        - Book/Volume titles -> Level 1-2
+        - Part/Section titles -> Level 2-3  
+        - Chapter titles -> Level 3-4
+        - Sub-sections -> Level 4+
+
+        Return ONLY a JSON object in this format:
+        {{
+            "chapter_titles": [
+                {{"title": "Exact title from input", "level": standardized_level_number}},
+                {{"title": "Exact title from input", "level": standardized_level_number}},
+                {{"title": "Exact title from input", "level": standardized_level_number}},
+                ...
+            ]
+        }}
+
+        Ensure the final result has:
+        - No duplicate titles
+        - Consistent and logical level assignments
+        - Proper chronological ordering
+        - Preserved original title formatting
+        
+        Now process the provided chapter title data and return the unified structure.
+        """
+        return prompt
+
+    
     def _process_long_document_by_chapters(self) -> list[str]:
         """处理超长文档 - 章节标题切分方式"""
         initial_chunks = self.initial_chunks
@@ -1610,6 +1689,10 @@ class LLMSplitter():
             try:
                 chapter_data = self._parse_chapter_titles_with_levels(response)
                 if chapter_data:
+                    # 打印提取到的章节标题
+                    print(f"Chunk {i+1} chapter titles:")
+                    for _, item in enumerate(chapter_data):
+                        print(f"Level {item['level']}: '{item['title']}'")
                     all_chapter_data.extend(chapter_data)
                     print(f"Extracted {len(chapter_data)} chapter titles from chunk {i+1}")
                 
@@ -1620,7 +1703,10 @@ class LLMSplitter():
         if not all_chapter_data:
             print("No chapter titles found in any chunk, falling back to semantic boundaries")
             return self.generate_chunks_by_boundaries()
-        
+        print("All chapter titles:")
+        for _, item in enumerate(all_chapter_data):
+            print(f"Level {item['level']}: '{item['title']}'")
+
         # 去重章节标题（保持顺序）
         unique_chapter_data = []
         seen_titles = set()
