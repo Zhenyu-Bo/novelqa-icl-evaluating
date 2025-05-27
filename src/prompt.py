@@ -3,24 +3,24 @@ def build_transform_question_prompt(question: str) -> str:
     这个提示词的作用是将问题转换为可以在单个章节中回答的问题"""
     prompt: str = f"""
     You are a helpful assistant. I will give you a question related to a novel. 
-    The novel is too long to analyze as a whole, so I will provide the novel chapter by chapter. 
-    Your task is to transform the given question into a form that can be answered based on the content of a single chapter. 
+    The novel is too long to analyze as a whole, so I will provide the novel chunk by chunk. 
+    Your task is to transform the given question into a form that can be answered based on the content of a single chunk. 
 
     Please follow these rules:
     1. Preserve the logical relationships (e.g., temporal, causal, comparative) in the original question, and ensure the transformed question reflects these relationships.
-    2. The transformed question must be specific to a single chapter and should not require information from other chapters.
+    2. The transformed question must be specific to a single chunk and should not require information from other chunks.
     3. If the question involves a sequence or time constraint (e.g., "for the first time"), ensure the transformed question asks for time or sequence-related details.
     4. Your output must only include the transformed question, wrapped in the special tokens `<answer>` and `</answer>`.
 
     Examples:
     - Original question: "How many times has Alice been mentioned in the novel?"
-    Your output may be: "<answer>How many times has Alice been mentioned in this chapter?</answer>"
+    Your output may be: "<answer>How many times has Alice been mentioned in this chunk?</answer>"
     - Original question: "Which chapter mentions Alice?"
-    Your output may be: "<answer>Does this chapter mention Alice?</answer>"
+    Your output may be: "<answer>Does this chunk mention Alice? If so, in which chapter?</answer>"
     - Original question: "Please list 3 aliases or designations of Valeria Brinton."
-    Your output may be: "<answer>List all direct and explicit evidence that Valeria Brinton has aliases or designations in this chapter.</answer>"
+    Your output may be: "<answer>List all direct and explicit evidence that Valeria Brinton has aliases or designations in this chunk.</answer>"
     - Original question: "When Jane Eyre met Mr. Lloyd for the first time, what was her feeling towards him?"
-    Your output may be: "<answer>Does Jane Eyre meet Mr. Lloyd in this chapter? If so, what was Jane Eyre's feelings towards Mr. Lloyd during their first meeting in this chapter? Additionally, if available, provide the context of their first meeting, including any time or sequence-related details.</answer>"
+    Your output may be: "<answer>Does Jane Eyre meet Mr. Lloyd in this chunk? If so, what was Jane Eyre's feelings towards Mr. Lloyd during their first meeting in this chunk? Additionally, if available, provide the context of their first meeting, including any time or sequence-related details.</answer>"
 
     The given question is: {question}.
     Now generate the transformed question.
@@ -34,19 +34,19 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     """
     # return f"""You are a literature professor. I will provide you with the full text of a chapter from a novel along with a question. Please thoroughly analyze the chapter's content to accurately respond to the following question.\nChapter Content:{chapter_content};\nBook ends. Questions start here:\n{question_options}\nQuestions end here. Try your best to answer the question based on the given full text of the chapter. The answer should be the analysis of text content around the question with the evidence from the chapter, and the answer."""
     prompt = f"""
-    You are a literature professor specializing in analyzing novels. I will provide you with the full text of a chapter from a novel and a question. Your task is to thoroughly analyze the chapter's content and provide an accurate and well-supported answer to the question.
+    You are a literature professor specializing in analyzing novels. I will provide you with the full text of a chunk from a novel and a question. Your task is to thoroughly analyze the chunk's content and provide an accurate and well-supported answer to the question.
 
     Please follow these steps:
     1. Carefully analyze the question to understand what is being asked.
-    2. Identify and list all evidence from the chapter that is directly, explicitly, and unambiguously relevant to the question. **You can just say "No relevant evidence found in this chapter." if you cannot find any direct and explicit evidence**, so do not over-interpret, speculate, or use implied or ambiguous content as evidence just to find evidence! Do not include evidence that merely hints, suggests, or implies the answer. Only use evidence that clearly and unambiguously states the fact.
+    2. Identify and list all evidence from the chunk that is directly, explicitly, and unambiguously relevant to the question. **You can just say "No relevant evidence found in this chunk." if you cannot find any direct and explicit evidence**, so do not over-interpret, speculate, or use implied or ambiguous content as evidence just to find evidence! Do not include evidence that merely hints, suggests, or implies the answer. Only use evidence that clearly and unambiguously states the fact.
     3. For each piece of evidence, explain why it is directly and explicitly relevant to the question and how it supports a possible answer. Do not use evidence that only hints or suggests the answer.
     4. For counting questions (e.g., "How many times does xxx appear?"):
-       - Only count events that are directly and explicitly described in the text. Do not count indirect mentions, implications, or references made by other characters.
+       - Only count events that are directly and explicitly described in the text. Do not count indirect mentions, implications, or references made by other chunks.
        - For each counted event, provide the exact quote or description from the text that directly supports the count.
        - If multiple pieces of evidence refer to the same event, treat them as one occurrence and explain your reasoning for deduplication. For example, if the question is "How many times do xxx and yyy communicated?", you should count a series of consecutive conversions between xxx and yyy as one, do not count each conversion separately and do not divide the entire conversation into multiple parts.
     5. Before answering, review all the evidence you have listed and re-examine whether each one is clearly and directly relevant to the question. Remove any evidence that is not obviously and explicitly relevant.
     6. Based only on the remaining evidence, reason step by step and provide a direct and precise answer to the question if possible.
-    7. Do not use information from other chapters or external sources.
+    7. Do not use information from other chunks or external sources.
     
     Format your output as follows:
     - Question Analysis: [Your analysis of the question]
@@ -54,12 +54,12 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
       - [Quote or description 1] — [Explanation of its relevance]
       - [Quote or description 2] — [Explanation of its relevance]
       - ...
-      - If no relevant evidence is found, write: "No relevant evidence found in this chapter."
+      - If no relevant evidence is found, write: "No relevant evidence found in this chunk."
     - Deduplication Reasoning (optional): [Your reasoning for deduplication, if any. Omit this step if there is no repetition.]
-    - Summary Analysis: [Summarize and synthesize the evidence from all chapters, explain your reasoning step by step]
+    - Summary Analysis: [Summarize and synthesize the evidence from the chunk, explain your reasoning step by step]
     - Answer: [Your direct response based only on the above evidence(for counting questions, avoid double counting the evidence if they refer to the same event)]
 
-    Here is the chapter content:
+    Here is the chunk content:
     {chapter_content}
 
     Here is the question:
@@ -80,45 +80,45 @@ def build_prompt_final(question: str) -> str:
     
     Please strictly follow the steps below:
 
-    1. Carefully review the answers and evidence for each chapter.
-       - For each chapter, check whether the evidence is directly, explicitly, and unambiguously relevant to the question and truly supports the answer.
+    1. Carefully review the answers and evidence for each chunk.
+       - For each chunk, check whether the evidence is directly, explicitly, and unambiguously relevant to the question and truly supports the answer.
        - Exclude evidences that merely hints, suggests, or implies the answer. Only use evidence that clearly and unambiguously states the fact.
 
-    2. After re-examination, collect the remaining relevant evidence from the chapters that supports your final answer.
+    2. After re-examination, collect the remaining relevant evidence from the chunks that supports your final answer.
 
     3. Before giving your final answer, list all supporting evidence:
-       - Indicate the chapter(s) where the evidence is found.
+       - Indicate the chunk(s) where the evidence is found.
        - Provide reference to the original text
        - Explain how each piece of evidence supports your final answer.
 
     4. For counting questions (e.g., "How many times does xxx appear?"):
        - Only count events that are directly and explicitly described in the text. Do not count indirect mentions, implications, or references made by other characters.
-       - Analyze whether different pieces of evidence, including those from different chapters, refer to the same event or unique occurrences.
-       - If evidence from different chapters or within the same chapter refers to the same event, avoid double-counting and clearly explain your deduplication reasoning.
+       - Analyze whether different pieces of evidence, including those from different chunks, refer to the same event or unique occurrences.
+       - If evidence from different chunks or within the same chunk refers to the same event, avoid double-counting and clearly explain your deduplication reasoning.
 
     5. Based only on the remaining, clearly relevant evidence, synthesize the information and provide a precise, well-supported final answer. Do not use any external knowledge, assumptions, or information not explicitly given.
 
     6. If you cannot find a suitable answer among the given options:
-       - Re-examine the logical reasoning in your previous steps to identify any potential errors or gaps.
+       - Re-examine the logical reasoning in your previous steps to identify any potential errors or gaps and whether the evidence is relevant to the question.
        - If the question is a counting question, examine whether you have double-counted the evidences that refer to the same event.
        - If necessary, refine your analysis and provide a revised answer based on the updated reasoning.
 
     Output format (strictly follow this structure):
 
-    1. Chapter Evidence and Analysis:
-       - Only include chapters where direct and explicit evidence is found. Omit chapters with no relevant evidence.
-       - Chapter X:
-         - Evidence: [All direct and explicit evidence from this chapter]
+    1. Chunk Evidence and Analysis:
+       - Only include chunks where direct and explicit evidence is found. Omit chunks with no relevant evidence.
+       - Chunk X:
+         - Evidence: [All direct and explicit evidence from this chunk]
          - Analysis: [Explain the relevance of each evidence]
-       - Chapter Y:
+       - Chunk Y:
          - Evidence: [...]
          - Analysis: [...]
-       - ... (repeat for all chapters with evidence)
+       - ... (repeat for all chunks with evidence)
 
     2. Deduplication Reasoning (optional): [Your reasoning for deduplication, if any. Omit this step if there is no repetition.]
     
     3. Summary Analysis:
-       - [Summarize and synthesize the evidence from all chapters, explain your reasoning step by step]
+       - [Summarize and synthesize the evidence from all chunks, explain your reasoning step by step]
        
     4. Re-examination:
        - [If you cannot find a suitable answer from the given options based on the above analysis, re-examine your logical reasoning in the previous steps to identify any potential errors or gaps. If the question is a counting question, examine whether you have double-counted the evidences that refer to the same event. If so, you should count them as one occurrence. If necessary, refine your analysis and provide a revised answer based on the updated reasoning.]
@@ -130,16 +130,18 @@ def build_prompt_final(question: str) -> str:
        <answer>my final answer: A, B, C, or D</answer>(Notice you can only choose one option, for example: <answer>my final answer: A</answer>)
 
     Example:
-    1. Chapter Evidence and Analysis:
-       - Chapter 1:
+    1. Chunk Evidence and Analysis:
+       - Chunk 1:
          - Evidence: "Quote1"
          - Analysis: "This directly shows..."
-       - Chapter 2:
+       - Chunk 2:
          - Evidence: "Quote2"
          - Analysis: "This is not relevant because..."
-    2. Deduplication Reasoning: The evidence ... from Chapter 1 and ... from Chapter 2 refer to the same event, so I only count it once...
+    2. Deduplication Reasoning: The evidence ... from Chunk 1 and ... from Chunk 2 refer to the same event, so I only count it once...
     3. Summary Analysis:
        - "Based on the above, the total times is ...(try to give a precise answer if possible)."
+    4. Re-examination:
+       - [If you cannot find a suitable answer from the given options based on the above analysis, re-examine your logical reasoning in the previous steps. If the question is a counting question, examine whether you have double-counted the evidences that refer to the same event. If so, you should count them as one occurrence.]
     4. Final Answer Explanation:
        - [Give your detailed answer based on the above analysis and evidence.]
     5. Final Choice:
