@@ -2,7 +2,7 @@ from src.llm import LLM, get_llm
 from src.path_builder import NovelQAPathBuilder
 from src.loader import BookLoader, QuestionLoader, BookMetaDataLoader
 from src.chapterizer import Chapterizer
-from src.extractor import extract_option
+from src.extractor import extract_option, split_reasoning_answer
 from src.prompt import build_transform_question_prompt, build_prompt_icl, build_prompt_final, build_prompt_icl2, build_prompt_icl_json, build_prompt_final_json
 import unicodedata
 import argparse
@@ -18,15 +18,17 @@ import inflect
 parser = argparse.ArgumentParser()
 parser.add_argument("--book_id", type=str, default="all")
 parser.add_argument("--question_id", type=str, default="all")
+parser.add_argument("--model", type=str, default="gemini2.0")
 parser.add_argument("--max_workers", type=int, default=4, help="Number of worker processes to use")
 parser.add_argument("--use_cache", type=bool, default=True, help="Whether to use cache for chapter contents")
 parser.add_argument("--cache_dir", type=str, default="./cache/chapters", help="Directory to store cache files")
-parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/prompt3", help="Directory to store output files")
+parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/dsr1", help="Directory to store output files")
 parser.add_argument("--skip_answered", action="store_true", help="Skip already answered questions")
 parser.add_argument("--no_skip_answered", action="store_false", dest="skip_answered", help="Do not skip already answered questions")
 parser.set_defaults(skip_answered=True)  # 默认值为 True
 args = parser.parse_args()
 skip_answered = args.skip_answered
+model_name = args.model
 
 
 NOVELQA_PATH = '../NovelQA'
@@ -55,8 +57,7 @@ for book_id in book_ids_to_remove:
         BOOK_IDS.remove(book_id)
 
 load_dotenv()
-api_key = os.environ.get("GEMINI_API_KEY")
-llm: LLM = get_llm('gemini', api_key=api_key)
+
 test_aspects = ['all']
 test_complexity = []
 
@@ -75,7 +76,8 @@ def question_transform(question: str, llm: LLM) -> str:
     # print("Original question:", question)
     response = llm.generate(prompt)
     # print("Response:", response)
-    transformed_question = response.replace("<answer>", "").replace("</answer>", "")
+    transformed_question = split_reasoning_answer(response)[1]
+    transformed_question = transformed_question.replace("<answer>", "").replace("</answer>", "")
     print("Transformed question:", transformed_question)
     return transformed_question
 
@@ -146,6 +148,7 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
         prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. The following are the answers to the transformed question for each chapter. """
         structure_dict, titles = get_chapter_contents_cached(chapterizer, book_id, use_cache=use_cache, cache_dir=cache_dir)  # 使用缓存函数获取章节结构数据
         chapter_answers = []
+        chapter_reasoning = []
         i = 1
         for title in tqdm(titles, desc=f"Processing chapters for {book_id}", leave=False):
             title_desc = title.split('_')[-1]
@@ -156,23 +159,31 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
             prompt_chapter = build_prompt_icl(content, transformed_question)
             answer_chapter = llm.generate(prompt_chapter)
             # print(answer_chapter)
+            reasoning_chapter, answer_chapter = split_reasoning_answer(answer_chapter)
             prompt_final += f"""The answer to chapter {title_desc} is: {answer_chapter}.\n"""
-            chapter_answers.append(f"The answer to the chapter {title_desc} is {answer_chapter}. ")
+            chapter_answers.append(f"{title_desc}: {answer_chapter}. ")
+            if reasoning_chapter is not None:
+                chapter_reasoning.append(f"{title_desc}: {reasoning_chapter}. ")
             i += 1
         
         # print(prompt_final)
         prompt_final += build_prompt_final(question.get_question_options())
-        answer_final = llm.generate(prompt_final)
+        llm_answer = llm.generate(prompt_final)
         # print(answer_final)
+        reasoning, answer_final = split_reasoning_answer(llm_answer)
         llm_option = extract_option(answer_final)
         is_correct = question.get_answer() == llm_option
         
+        question_dict[question_id]["TransformedQuestion"] = transformed_question
         question_dict[question_id]["ModelAnswer"] = llm_option
         question_dict[question_id]["Correct"] = is_correct
+        if reasoning is not None:
+            question_dict[question_id]["Reasoning"] = reasoning
         question_dict[question_id]["Analysis"] = answer_final
         question_dict[question_id]["ChapterAnswers"] = chapter_answers
-        question_dict[question_id]["TransformedQuestion"] = transformed_question
-        print(f"Question {question_id} - Correct Answer: {question.get_answer()} - Model Answer: {llm_option}, Correct: {is_correct}")
+        if chapter_reasoning is not None:
+            question_dict[question_id]["ChapterReasoning"] = chapter_reasoning
+        print(f"Book: {book_id} - Question {question_id} - Correct Answer: {question.get_answer()} - Model Answer: {llm_option}, Correct: {is_correct}")
         prompt_final = ""
         save_results_by_question(question_dict, book_id, question_id, output_dir=output_dir)
 
@@ -210,10 +221,9 @@ def save_results_by_question(results: dict, book_id: str, question_id: str, outp
     print(f"Results saved to {outfile}")
 
 
-def process_book(book_id: str, question_id: str, model_name: str = 'gemini', output_dir: str = './outputs/reduce', use_cache: bool = True, cache_dir: str = './cache'):
+def process_book(book_id: str, question_id: str, model_name: str = 'gemini', api_key: str = None, output_dir: str = './outputs/reduce', use_cache: bool = True, cache_dir: str = './cache') -> str:
     try:
         # 在子进程中重新初始化 llm
-        api_key = os.environ.get("GEMINI_API_KEY")
         llm = get_llm(model_name, api_key=api_key)
         reduce_test(book_id, question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
         return f"Book {book_id} processed successfully."
@@ -230,9 +240,17 @@ if __name__ == "__main__":
     output_dir = args.output_dir
     use_cache = args.use_cache
     cache_dir = args.cache_dir
+    if model_name == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY")
+    elif model_name == "deepseek" or model_name == "deepseek-r1":
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+    else:
+        api_key = None
+    llm: LLM = get_llm(model_name, api_key=api_key)
     os.makedirs(output_dir, exist_ok=True)
     if use_cache:
         os.makedirs(cache_dir, exist_ok=True)
+    print("Model name:", model_name)
     # # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
     # for book_id in tqdm(BOOK_IDS, desc="Processing books"):
     #     if args.book_id != 'all' and book_id != args.book_id:
@@ -240,11 +258,11 @@ if __name__ == "__main__":
     #     results = reduce_test(book_id, args.question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
         # save_results(results, book_id, output_dir=output_dir)
     # 设置多进程池
-    max_workers = min(len(BOOK_IDS), args.max_workers)  # 使用 CPU 核心数或书本数中的较小值
+    max_workers = min(len(BOOK_IDS), args.max_workers)
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         # 提交每本书的任务到进程池
         futures = {
-            executor.submit(process_book, book_id, args.question_id, 'gemini', output_dir, use_cache, cache_dir): book_id
+            executor.submit(process_book, book_id, args.question_id, model_name, api_key, output_dir, use_cache, cache_dir): book_id
             for book_id in BOOK_IDS
             if args.book_id == 'all' or book_id == args.book_id
         }
