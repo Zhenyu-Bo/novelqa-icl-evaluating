@@ -141,7 +141,7 @@ class Chapterizer:
             book_title (str): 小说标题
         """
         # 书籍内容与标题
-        self.book_content = book_content
+        self.book_content = Chapterizer._remove_invisible_chars(book_content)
         self.book_title = book_title    
         # 章节标题字典，键为章节标题，值为章节级别，小说标题级别为1，其后章节级别依次递增
         self.chapter_levels = {book_title: 1} if book_title is not None else {}
@@ -166,10 +166,11 @@ class Chapterizer:
         if not isinstance(s, str):
             print(f"Warning: {s} is not a string, type: {type(s)}")
             return None
-        invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '.', '\n', '\r']
+        s = re.sub(r'\s+', ' ', s)
+        invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '.']
         for char in invalid_chars:
-            s = s.replace(char, '')
-        return s
+            s = s.replace(char, ' ')
+        return s.strip()
 
     def _chapterize(self):
         """章节化"""
@@ -475,27 +476,327 @@ class Chapterizer:
         return markdown
 
 
+import re
 from .llm import LLM
 import json
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+import tiktoken
 class LLMChapterizer(Chapterizer):
-    """章节化类, 使用LLM进行章节化
-    Args:
-        Chapterizer (Chapterizer): 章节化类
-    """
+    """章节化类, 使用LLM进行章节化"""
+    
     def __init__(self, llm: LLM, book_content: str, book_title: str = None):
         self.llm = llm
+        self.token_counter = tiktoken.get_encoding("cl100k_base")
+        self.tokens_num = len(self.token_counter.encode(book_content))
         super().__init__(book_content, book_title)
         
-    def _chapterize(self, chunk_size: int = 1000000, chunk_overlap: int = 10000):
-        lines = self.book_content.split('\n')
+    def _fill_content_recursive(self, structure: dict, book_content: str) -> dict:
+        """
+        从章节结构中填充内容的新实现
+        Args:
+            structure (dict): 章节结构字典，不包含内容
+            book_content (str): 小说内容
+        Returns:
+            dict: 包含标题-内容映射的字典
+        """
+        # 提取所有章节标题和层级信息
+        all_chapters = self._extract_all_chapters(structure)
+        
+        if not all_chapters:
+            return {"Introduction": book_content}
+        
+        # 找到最低等级（数值最大）的章节
+        max_level = min(chapter['level'] for chapter in all_chapters if chapter['level'] > 1)
+        top_level_chapters = [ch for ch in all_chapters if ch['level'] == max_level]
+        
+        print(f"Found {len(top_level_chapters)} top-level chapters at level {max_level}")
+        
+        # 在原文中查找这些章节标题并切分内容
+        chapter_contents = self._split_content_by_titles(book_content, top_level_chapters)
+        
+        return chapter_contents
+    
+    def _extract_all_chapters(self, structure: dict) -> list[dict]:
+        """
+        递归提取所有章节信息
+        Args:
+            structure (dict): 章节结构
+        Returns:
+            list[dict]: 包含标题和层级的章节列表
+        """
+        chapters = []
+        
+        def extract_recursive(struct, level):
+            if struct.get('title'):
+                chapters.append({
+                    'title': struct['title'],
+                    'level': level
+                })
+            
+            for sub_struct in struct.get('structures', []):
+                extract_recursive(sub_struct, level + 1)
+        
+        extract_recursive(structure, 1)
+        return chapters
+    
+    def _split_content_by_titles(self, book_content: str, chapters: list[dict]) -> dict:
+        """
+        根据章节标题切分内容
+        Args:
+            book_content (str): 原始书籍内容
+            chapters (list[dict]): 章节列表
+        Returns:
+            dict: 标题-内容映射字典
+        """
+        # 预处理文本
+        lines = book_content.split('\n')
         lines = [self._remove_invisible_chars(line) for line in lines if line.strip()]
-        # lines = self._ignore_toc(lines)
-        structure = self.generate_chapter_structure(lines)
-        # structure = self.generate_chapter_contents_chunk_by_chunk(chunk_size = chunk_size, chunk_overlap = chunk_overlap)
+        lines = self._ignore_toc(lines)
+        
+        # 查找每个标题在文本中的位置
+        title_positions = []
+        
+        for chapter in chapters:
+            position = self._find_title_position(lines, chapter['title'])
+            if position is not None:
+                title_positions.append({
+                    'title': chapter['title'],
+                    'position': position,
+                    'level': chapter['level']
+                })
+                print(f"Found title '{chapter['title']}' at line {position}")
+            else:
+                print(f"Warning: Title '{chapter['title']}' not found in text")
+        
+        # 按位置排序
+        title_positions.sort(key=lambda x: x['position'])
+        
+        # 切分内容
+        chapter_contents = {}
+        
+        # 处理第一个标题之前的内容
+        if title_positions and title_positions[0]['position'] > 0:
+            intro_content = '\n'.join(lines[:title_positions[0]['position']])
+            if intro_content.strip():
+                chapter_contents['Introduction'] = intro_content.strip()
+        
+        # 处理每个标题及其内容
+        for i, title_info in enumerate(title_positions):
+            title = title_info['title']
+            start_pos = title_info['position']
+            
+            # 确定结束位置
+            if i + 1 < len(title_positions):
+                end_pos = title_positions[i + 1]['position']
+            else:
+                end_pos = len(lines)
+            
+            # 提取内容（包含标题行）
+            content_lines = lines[start_pos:end_pos]
+            content = '\n'.join(content_lines).strip()
+            
+            if content:
+                chapter_contents[title] = content
+                print(f"Filled content for '{title}': {len(content)} characters")
+        
+        # 如果没有找到任何标题，将所有内容归为Introduction
+        if not chapter_contents:
+            chapter_contents['Introduction'] = book_content.strip()
+        
+        return chapter_contents
+    
+    def _find_title_position(self, lines: list[str], target_title: str) -> int:
+        """
+        在文本行中查找标题的位置
+        Args:
+            lines (list[str]): 文本行列表
+            target_title (str): 目标标题
+        Returns:
+            int: 标题所在行号，未找到返回None
+        """
+        # 清理目标标题用于匹配
+        target_clean = self._remove_invalid_chars(target_title.strip())
+        target_words = target_clean.lower().split()
+        
+        if not target_words:
+            return None
+        
+        # 遍历每一行寻找匹配
+        for line_idx, line in enumerate(lines):
+            line_clean = self._remove_invalid_chars(line.strip())
+            
+            # 尝试完整匹配
+            if target_clean.lower() in line_clean.lower():
+                return line_idx
+            
+            # 尝试单词匹配
+            if self._match_title_words(line_clean, target_words):
+                return line_idx
+        
+        # 如果没有找到完整匹配，尝试模糊匹配
+        return self._fuzzy_find_title(lines, target_title)
+    
+    def _match_title_words(self, line: str, target_words: list[str]) -> bool:
+        """
+        检查行是否包含目标标题的所有关键词
+        Args:
+            line (str): 待检查的行
+            target_words (list[str]): 目标词列表
+        Returns:
+            bool: 是否匹配
+        """
+        line_lower = line.lower()
+        matched_words = 0
+        
+        for word in target_words:
+            if len(word) >= 2 and word in line_lower:  # 只检查长度>=2的词
+                matched_words += 1
+        
+        # 如果匹配的重要词汇超过50%，认为找到了标题
+        return matched_words >= len(target_words) * 0.6
+    
+    def _fuzzy_find_title(self, lines: list[str], target_title: str) -> int:
+        """
+        模糊查找标题位置
+        Args:
+            lines (list[str]): 文本行列表
+            target_title (str): 目标标题
+        Returns:
+            int: 最佳匹配行号，未找到返回None
+        """
+        import difflib
+        
+        target_clean = self._remove_invalid_chars(target_title.strip()).lower()
+        best_ratio = 0
+        best_position = None
+        
+        for line_idx, line in enumerate(lines):
+            line_clean = self._remove_invalid_chars(line.strip()).lower()
+            
+            # 计算相似度
+            ratio = difflib.SequenceMatcher(None, target_clean, line_clean).ratio()
+            
+            if ratio > best_ratio and ratio > 0.6:  # 相似度阈值
+                best_ratio = ratio
+                best_position = line_idx
+        
+        if best_position is not None:
+            print(f"Fuzzy matched '{target_title}' with ratio {best_ratio:.3f} at line {best_position}")
+        
+        return best_position
+    
+    def _build_structure_tree(self, chapter_list: list) -> dict:
+        """
+        从章节列表构建树形结构（修改版本，支持新的内容填充方式）
+        """
+        if not chapter_list:
+            return {"title": "Unknown Book", "structures": [], "content": ""}
+        
+        # 找到书籍标题（level 1）
+        book_title = "Unknown Book"
+        for item in chapter_list:
+            if item.get('level') == 1:
+                book_title = self._clean_title(item.get('title', ''))
+                break
+        
+        root = {"title": book_title, "structures": [], "content": ""}
+        structure_stack = [root]
+        level_stack = [1]
+        
+        for item in chapter_list:
+            title = self._clean_title(item.get('title', ''))
+            level = item.get('level', 2)
+            
+            if level <= 1:
+                continue  # 跳过书籍标题
+            
+            # 调整栈，确保层级关系正确
+            while len(level_stack) > 1 and level <= level_stack[-1]:
+                popped = structure_stack.pop()
+                level_stack.pop()
+                if structure_stack:
+                    structure_stack[-1]['structures'].append(popped)
+            
+            # 创建新的章节结构
+            new_structure = {"title": title, "structures": [], "content": ""}
+            structure_stack.append(new_structure)
+            level_stack.append(level)
+        
+        # 处理剩余的栈
+        while len(structure_stack) > 1:
+            popped = structure_stack.pop()
+            structure_stack[-1]['structures'].append(popped)
+        
+        return root
+    
+    def get_chapter_contents_from_structure(self, structure: dict = None) -> dict:
+        """
+        从结构中获取章节内容（新方法）
+        Args:
+            structure (dict): 章节结构，如果为None则使用self.structure
+        Returns:
+            dict: 标题-内容映射字典
+        """
+        if structure is None:
+            structure = self.structure
+        
+        return self._fill_content_recursive(structure, self.book_content)
+    
+    def save_chapter_contents(self, output_dir: str, structure: dict = None) -> None:
+        """
+        保存章节内容到文件
+        Args:
+            output_dir (str): 输出目录
+            structure (dict): 章节结构，如果为None则使用self.structure
+        """
+        import os
+        import shutil
+        
+        chapter_contents = self.get_chapter_contents_from_structure(structure)
+        
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        for i, (title, content) in enumerate(chapter_contents.items()):
+            # 清理标题用作文件名
+            safe_title = self._remove_invalid_chars(title)
+            safe_title = safe_title[:50] if len(safe_title) > 50 else safe_title  # 限制文件名长度
+            
+            file_path = os.path.join(output_dir, f"{i+1:02d}_{safe_title}.txt")
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(f"# {title}\n\n{content}")
+        
+        print(f"已将{len(chapter_contents)}个章节保存到 {output_dir} 目录")
+
+    # 还需要修改_chapterize方法以使用新的内容填充方式
+    def _chapterize(self, chunk_size: int = 600000, chunk_overlap: int = 2000):
+        """主要的章节化方法（修改版本）"""
+        # 如果内容较短，直接处理
+        if self.tokens_num <= chunk_size:
+            structure = self.generate_chapter_structure()
+        else:
+            # 内容较长，分块处理
+            structure = self.generate_chapter_contents_chunk_by_chunk(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap
+            )
+            print("Chunks number:", len(structure))
+        
+        # 存储结构
+        self.structure = structure
+        
         print(json.dumps(structure, indent=2, ensure_ascii=False))
         
-        # 递归方法，用于遍历章节结构并生成 chapter_levels 和 chapter_titles
+        # 使用新方法填充内容并生成章节信息
+        chapter_contents = self.get_chapter_contents_from_structure(structure)
+        
+        # 重置并重新构建章节信息
+        self.chapter_levels = {}
+        self.chapter_titles = []
+        
+        # 递归遍历章节结构并生成 chapter_levels 和 chapter_titles
         def traverse_structure(structure, level):
             title = structure['title']
             self.chapter_levels[title] = level
@@ -503,213 +804,342 @@ class LLMChapterizer(Chapterizer):
             for substructure in structure.get('structures', []):
                 traverse_structure(substructure, level + 1)
 
-        # 从根结构开始递归
         traverse_structure(structure, 1)
+        
+        # 为实际找到的章节内容也建立层级关系
+        for i, title in enumerate(chapter_contents.keys()):
+            if title not in self.chapter_levels:
+                # 根据位置推断层级，Introduction为最高级，其他按顺序
+                if title == "Introduction":
+                    self.chapter_levels[title] = 2
+                else:
+                    self.chapter_levels[title] = 3  # 假设实际章节为第3级
+                self.chapter_titles.append(title)
+        
+        print("章节标题列表:")
+        print(self.chapter_titles)
+        print(f"实际提取的章节内容: {list(chapter_contents.keys())}")
         
     def set_prompt(self, content: str) -> str:
         """设置让 LLM 进行章节切分的提示词"""
         prompt = f"""
-        You are a helpful assistant. I will provide you with the content of a novel. Your task is to identify the chapters and their levels.
-        Return the result as a structured JSON object where each chapter has a title and its level(1 for the main title, 2 for the first level, etc.).
-        
-        Note:
-        - If the content includes a table of contents (TOC), **ignore the TOC and extract chapter titles directly from the main body of the text**.
-        - Do not include "Contents" or similar non-chapter headings as part of the chapter structure.
-        - The title of a chapter may not explicitly contain words like "Chapter", "Part", or "Section".
-        - A chapter title may span multiple lines. For example, a title might consist of a main heading followed by a subtitle on the next line. **In such cases, combine the lines into a single title by joining them with a space.**
-        - **Ensure that the chapter titles in your output exactly match the original text, including all characters, punctuation marks (e.g., ".", "-", ":", etc.), and formatting. Do not modify or normalize the titles.**
-        - You need to infer the chapter boundaries and titles based on the context and semantics of the text.
-        - **If a chapter title is too simple (e.g., a single number or word), include the first sentence or phrase following the title as part of the title to make it more identifiable.**
+        You are a professional text processing assistant. Your task is to identify the chapter structure of a novel and return it as a JSON array.
 
-        Here is the content of the novel: {content}
+        CRITICAL REQUIREMENTS:
+        1. Extract chapter titles EXACTLY as they appear in the original text
+        2. Preserve ALL formatting: punctuation, capitalization, spacing, line breaks, and special characters
+        3. Each title must be findable in the original text using exact string matching
+        4. Do NOT modify, normalize, or clean up the titles in any way
 
-        Please provide the chapter structure in the following format:
+        Requirements:
+        1. Analyze the text and identify chapter titles and their hierarchical levels
+        2. Level 1: Book title/main title
+        3. Level 2: Part/Section titles (if any)  
+        4. Level 3+: Chapter titles and sub-chapters
+        5. Ignore table of contents - extract titles from the actual content
+        6. If a title spans multiple lines, preserve the exact line breaks as they appear
+        7. For very simple titles (single words/numbers like "I", "1", "One", etc.), connect the title with the first following sentence using "-" to make them more identifiable.
+        For example, if the title is "I" and the first sentence is "The story begins", return it as "I-The story begins". If the title is "1" and the first sentence is "The sun was shining brightly", return it as "1-The sun was shining brightly". If the title is "One" and the first sentence is "The story begins", return it as "One-The story begins". This helps LLMs recognize them as titles.
+
+        IMPORTANT: The returned titles must match the original text character-for-character, including:
+        - All punctuation marks (., -, :, ;, !, ?, etc.)
+        - All spacing and whitespace
+        - All line breaks (\\n)
+        - All capitalization
+        - All special characters
+
+        Text to analyze:
+        {content}
+
+        Return ONLY a JSON array in this format:
         [
-            {{"title": "[the title of the chapter1]", "level": [the level of the chapter1]}},
-            {{"title": "[he title of the chapter2]", "level": [he title of the chapter2]}},
+            {{"title": "Exact title as it appears in original text", "level": 1}},
+            {{"title": "Exact title as it appears in original text", "level": 2}},
+            {{"title": "Exact title as it appears in original text", "level": 3}},
             ...
         ]
-        For example, if the content is:
-        "
-            THE LAW AND THE LADY
-            by Wilkie Collins
-            
-            Contents:
-            Chapter 1. THE BRIDE’S MISTAKE
-            Chapter 2. THE BRIDE’S THOUGHTS
-            Chapter 3. THE STORY OF THE TRIAL. THE PRELIMINARIES
-            Chapter 4. FIRST QUESTION--DID THE WOMAN DIE POISONED?
-            Chapter 5. THE LAST OF THE STORY
-            
-            PART I. PARADISE LOST.
-            CHAPTER I. 
-            THE BRIDE’S MISTAKE.
-            “FOR after this manner in the old time the holy women also who trusted in God adorned themselves, ...”
-            CHAPTER II. THE BRIDE’S THOUGHTS.
-            WE had been traveling for a little more than an hour when a change passed insensibly over us both.
-            PART II. PARADISE REGAINED.
-            CHAPTER III THE STORY OF THE TRIAL. THE PRELIMINARIES.
-            LET me confess another weakness, on my part, before I begin the Story of the Trial ...
-            CHAPTER IV. FIRST QUESTION--DID THE WOMAN DIE POISONED?
-            THE proceedings began at ten o’clock. The prisoner was placed at the Bar, ...
-            CHAPTER V.
-            THE LAST OF THE STORY.
-            In ten days more we returned to England, accompanied by Benjamin. ...
-        "
-        Your output should be:
-        "
-        [
-            {{"title": "THE LAW AND THE LADY", "level": 1}},
-            {{"title": "PART I. PARADISE LOST.", "level": 2}},
-            {{"title": "CHAPTER I. THE BRIDE’S MISTAKE.", "level": 3}},
-            {{"title": "CHAPTER II. THE BRIDE’S THOUGHTS.", "level": 3}},
-            {{"title": "PART II. PARADISE REGAINED.", "level": 2}},
-            {{"title": "CHAPTER III THE STORY OF THE TRIAL. THE PRELIMINARIES.", "level": 3}},
-            {{"title": "CHAPTER IV. FIRST QUESTION--DID THE WOMAN DIE POISONED?", "level": 3}},
-            {{"title": "CHAPTER V. THE LAST OF THE STORY.", "level": 3}},
-        ]"
-        
-        Now please provide the chapter structure for the given content.
+
+        Ensure the JSON is valid and properly formatted.
         """
-        
         return prompt
         
-    
-    def set_merge_prompt(self, structures: list[dict]) -> str:
+    def set_merge_prompt(self, chunk_structures: list[list]) -> str:
         """设置让 LLM 合并章节的提示词"""
         prompt = f"""
-        You are a helpful assistant. I will provide you with a list of chapter structures generated from different parts of a novel. 
-        Your task is to merge these chapter structures into a single unified structure, ensuring there are no duplicate chapters across different parts.
+        You are a professional text processing assistant. I will provide you with multiple chapter structure arrays extracted from different parts of a novel. Your task is to merge them into a single unified structure.
 
-        Here is the list of chapter structures: {json.dumps(structures, ensure_ascii=False)}
+        CRITICAL REQUIREMENTS:
+        1. Preserve ALL chapter titles EXACTLY as they appear in the input
+        2. Do NOT modify titles in any way - keep original formatting, punctuation, spacing, line breaks
+        3. Use exact string matching for duplicate detection
 
-        Please provide the merged chapter structure in the following format:
+        Chapter structures from different parts:
+        {json.dumps(chunk_structures, ensure_ascii=False, indent=2)}
+
+        Requirements for merging:
+        1. Remove duplicate chapters that appear in multiple parts (using exact title matching)
+        2. Maintain the correct chronological order of chapters
+        3. Ensure level consistency across the entire structure
+        4. Handle overlapping content from chunk boundaries
+        5. Preserve the original formatting of all titles EXACTLY
+        6. The first structure usually contains the book title (level 1)
+
+        Rules:
+        - If the same chapter title appears in multiple parts, keep only the first instance
+        - Maintain the sequence based on the order of appearance in the original text
+        - Ensure parent-child relationships are preserved (e.g., chapters under the correct parts)
+        - Remove any incomplete or truncated chapter entries from chunk boundaries
+        - Do NOT change any character in the titles
+
+        Return ONLY a JSON array in this format:
         [
-            {{"title": "[the title of the chapter1]", "level": [the level of the chapter1]}},
-            {{"title": "[the title of the chapter2]", "level": [the level of the chapter2]}},
+            {{"title": "Exact title from input", "level": 1}},
+            {{"title": "Exact title from input", "level": 2}},
+            {{"title": "Exact title from input", "level": 3}},
             ...
         ]
 
-        Note:
-        - The chapter structures are generated from different parts of the novel, and the chapter level standards may vary between parts. When merging, ensure that the chapter levels are unified and consistent across the entire structure.
-        - If two or more chapters have the same title and level, they should be merged into a single chapter in the final structure.
-        - The order of chapters should be preserved as much as possible based on their appearance in the input structures.
-        - Ensure that the final structure is a valid JSON array and follows the specified format.
-        
-        Now please provide the merged chapter structure for the given list of chapter structures.
+        Ensure the final result is a valid JSON array with no duplicates and proper ordering.
         """
-        
         return prompt
     
     def _parse_chapter_structure(self, response: str) -> dict:
         """解析 LLM 的输出"""
         try:
-            # 匹配 JSON 数组
-            match = re.search(r'\[.*?\]', response, re.DOTALL)
-            if not match:
-                raise ValueError("LLM response does not contain a valid JSON array")
-            response = match.group(0)  # 提取匹配到的 JSON 数组
-
-            # 解析 JSON
-            result = json.loads(response)
-            if not isinstance(result, list):
-                raise ValueError("Parsed JSON is not a list")
+            # 提取 JSON 数组
+            json_match = re.search(r'\[[\s\S]*\]', response)
+            if not json_match:
+                raise ValueError("No valid JSON array found in LLM response")
             
-            # 构造章节结构
-            # 寻找根节点（层级为 1）
-            roots = [title for title in result if title['level'] == 1]
-            self.book_title = roots[0]['title'] if len(roots) == 1 else "The book"
-            structure = {"title": self.book_title, "structures": [], "content": ""}
-            structure_stack: list[dict] = [structure]  # 存储既往章节结构
-            level_stack: list[int] = [1]  # 存储既往章节层级
-            # self.chapter_levels = {structure['title']: 1}  # 初始化章节级别字典
-            # self.chapter_titles = [structure['title']]  # 初始化章节标题列表
-
-            for item in result:
-                title = LLMChapterizer._remove_invalid_chars(item['title'].strip())  # 清理标题
-                level = item['level']
-                
-                if level <= 1:
-                    # 只有根节点（书籍标题）的层级为 1
-                    continue
-
-                # 如果当前章节的层级小于栈顶的层级，弹出栈顶
-                while level <= level_stack[-1]:
-                    pop_structure = structure_stack.pop()
-                    structure_stack[-1]['structures'].append(pop_structure)  # 将弹出的章节添加到父章节的 structures 中
-                    level_stack.pop()
-                
-                level_stack.append(level)
-                structure_stack.append({"title": title, "structures": [], "content": ""})  # 将新章节压入栈中
-                # self.chapter_levels[title] = level  # 更新章节级别
-                # self.chapter_titles.append(title)  # 添加章节标题到列表中
-
-            while len(structure_stack) > 1:
-                pop_structure = structure_stack.pop()
-                structure_stack[-1]['structures'].append(pop_structure)
-
-            return structure
+            json_str = json_match.group(0)
+            result = json.loads(json_str)
+            
+            if not isinstance(result, list) or not result:
+                raise ValueError("Parsed result is not a valid list or is empty")
+            
+            # 构建章节结构树
+            return self._build_structure_tree(result)
+            
         except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse JSON: {e}")
+            raise ValueError(f"JSON parsing failed: {e}")
+        except Exception as e:
+            raise ValueError(f"Structure parsing failed: {e}")
     
+    # def _build_structure_tree(self, chapter_list: list) -> dict:
+    #     """从章节列表构建树形结构"""
+    #     if not chapter_list:
+    #         return {"title": "Unknown Book", "structures": [], "content": ""}
+        
+    #     # 找到书籍标题（level 1）
+    #     book_title = "Unknown Book"
+    #     for item in chapter_list:
+    #         if item.get('level') == 1:
+    #             book_title = self._clean_title(item.get('title', ''))
+    #             break
+        
+    #     root = {"title": book_title, "structures": [], "content": ""}
+    #     structure_stack = [root]
+    #     level_stack = [1]
+        
+    #     for item in chapter_list:
+    #         title = self._clean_title(item.get('title', ''))
+    #         level = item.get('level', 2)
+            
+    #         if level <= 1:
+    #             continue  # 跳过书籍标题
+            
+    #         # 调整栈，确保层级关系正确
+    #         while len(level_stack) > 1 and level <= level_stack[-1]:
+    #             popped = structure_stack.pop()
+    #             level_stack.pop()
+    #             if structure_stack:
+    #                 structure_stack[-1]['structures'].append(popped)
+            
+    #         # 创建新的章节结构
+    #         new_structure = {"title": title, "structures": [], "content": ""}
+    #         structure_stack.append(new_structure)
+    #         level_stack.append(level)
+        
+    #     # 处理剩余的栈
+    #     while len(structure_stack) > 1:
+    #         popped = structure_stack.pop()
+    #         structure_stack[-1]['structures'].append(popped)
+        
+    #     return root
+    
+    def _clean_title(self, title: str) -> str:
+        """清理章节标题"""
+        if not isinstance(title, str):
+            return str(title)
+        
+        # 移除不可见字符但保留格式
+        cleaned = self._remove_invalid_chars(title.strip())
+        return cleaned if cleaned else "Untitled"
     
     def generate_chapter_structure(self, content: str = None) -> dict:
         """调用 LLM 生成章节结构"""
-        prompt = self.set_prompt(content) if content else self.set_prompt(self.book_content)
+        target_content = content if content else self.book_content
+        
+        if not target_content or not target_content.strip():
+            raise ValueError("Content is empty, cannot generate chapter structure")
+        
+        prompt = self.set_prompt(target_content)
         response = self.llm.generate(prompt)
-        if response is None or response.strip() == "":
-            raise ValueError("LLM response is empty or None, please check the LLM configuration or input content.")
+        
+        if not response or not response.strip():
+            raise ValueError("LLM returned empty response")
+        
         print("LLM response:")
+        # print(response[:500] + "..." if len(response) > 500 else response)
         print(response)
-        response = self._remove_invisible_chars(response)
-        # print("LLM response:", response)
-        # 解析 LLM 的输出
-        structure = self._parse_chapter_structure(response)
+        
+        # 清理响应并解析
+        cleaned_response = self._remove_invisible_chars(response)
+        structure = self._parse_chapter_structure(cleaned_response)
+        
         return structure
 
-    def generate_chapter_contents_chunk_by_chunk(self, chunk_size: int = 1000000, chunk_overlap: int = 10000) -> list[dict]:
-        """使用 LLM 生成章节内容，分块处理
-        Args:
-            chunk_size (int): 每个块的大小，默认 1000000 字符
-            chunk_overlap (int): 块之间的重叠部分，默认 10000 字符
-        Returns:
-            list[str]: 章节内容列表
-        """
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    def generate_chapter_contents_chunk_by_chunk(self, chunk_size: int = 800000, chunk_overlap: int = 500) -> dict:
+        """使用 LLM 分块生成章节内容并合并"""
+        
+        # 分割文本
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size * 3,
+            chunk_overlap=chunk_overlap * 3,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        
         chunks = text_splitter.split_text(self.book_content)
-        print(f"Total chunks: {len(chunks)}")
-        structures = ""
-        for chunk in chunks:
-            structure = self.generate_chapter_structure(chunk)
-            print(json.dumps(structure, indent=2, ensure_ascii=False))
-            structures += json.dumps(structure, ensure_ascii=False) + "\n"
-        structures = structures.strip().split('\n')
-        # 合并章节结构
-        prompt = self.set_merge_prompt(structures)
-        response = self.llm.generate(prompt)
-        print("LLM merge response:")
-        print(response)
-        if response is None or response.strip() == "":
-            raise ValueError("LLM response is empty or None, please check the LLM configuration or input content.")
-        response = self._remove_invisible_chars(response)
-        # 解析 LLM 的输出
-        merged_structure = self._parse_chapter_structure(response)
-        # print(json.dumps(merged_structure, indent=2, ensure_ascii=False))
+        print(f"Split content into {len(chunks)} chunks")
+        
+        chunk_structures = []
+        
+        # 处理每个块
+        for i, chunk in enumerate(chunks):
+            print(f"Processing chunk {i+1}/{len(chunks)}")
+            
+            if not chunk.strip():
+                continue
+                
+            try:
+                # 为每个块生成章节结构
+                prompt = self.set_prompt(chunk)
+                response = self.llm.generate(prompt)
+                
+                if not response or not response.strip():
+                    print(f"Warning: Empty response for chunk {i+1}")
+                    continue
+                
+                # 提取 JSON
+                json_match = re.search(r'\[[\s\S]*?\]', response)
+                if json_match:
+                    chunk_structure = json.loads(json_match.group(0))
+                    if chunk_structure:  # 只添加非空结构
+                        chunk_structures.append(chunk_structure)
+                        print(f"Extracted {len(chunk_structure)} chapters from chunk {i+1}")
+                
+            except Exception as e:
+                print(f"Error processing chunk {i+1}: {e}")
+                continue
+        
+        if not chunk_structures:
+            raise ValueError("No valid chapter structures extracted from any chunk")
+        
+        # 合并所有块的结构
+        merged_structure = self._merge_chunk_structures(chunk_structures)
+        
         return merged_structure
+    
+    def _merge_chunk_structures(self, chunk_structures: list[list]) -> dict:
+        """合并多个块的章节结构"""
+        if not chunk_structures:
+            return {"title": "Unknown Book", "structures": [], "content": ""}
+        
+        if len(chunk_structures) == 1:
+            return self._build_structure_tree(chunk_structures[0])
+        
+        # 使用 LLM 进行智能合并
+        try:
+            merge_prompt = self.set_merge_prompt(chunk_structures)
+            response = self.llm.generate(merge_prompt)
+            
+            if not response or not response.strip():
+                print("Warning: LLM merge failed, using fallback method")
+                return self._fallback_merge(chunk_structures)
+            
+            print("LLM merge response:")
+            # print(response[:500] + "..." if len(response) > 500 else response)
+            print(response)
+            
+            # 解析合并结果
+            cleaned_response = self._remove_invisible_chars(response)
+            return self._parse_chapter_structure(cleaned_response)
+            
+        except Exception as e:
+            print(f"LLM merge failed: {e}, using fallback method")
+            return self._fallback_merge(chunk_structures)
+    
+    def _fallback_merge(self, chunk_structures: list[list]) -> dict:
+        """备用合并方法：简单去重和排序"""
+        all_chapters = []
+        seen_titles = set()
+        
+        # 收集所有唯一的章节
+        for structure in chunk_structures:
+            for chapter in structure:
+                title = chapter.get('title', '').strip()
+                level = chapter.get('level', 2)
+                
+                # 使用标题和级别的组合作为唯一标识
+                identifier = f"{title}|{level}"
+                
+                if identifier not in seen_titles and title:
+                    seen_titles.add(identifier)
+                    all_chapters.append(chapter)
+        
+        # 按级别排序，然后按出现顺序
+        all_chapters.sort(key=lambda x: (x.get('level', 999), chunk_structures[0].index(x) if x in chunk_structures[0] else 999))
+        
+        return self._build_structure_tree(all_chapters)
     
 
 import tiktoken
-class LLMSpliter():
+class LLMSplitter():
     """使用 LLM 将书本内容按语义切分为 chunks """
-    def __init__(self, llm: LLM, book_content: str, chunk_tokens=50000, max_llm_tokens=600000, chunk_overlap=2000):
+    def __init__(self, llm: LLM, book_content: str, chunk_tokens=50000, max_llm_tokens=600000, chunk_overlap=0):
         self.llm = llm
-        self.book_content = book_content
-        self.chunk_tokens = chunk_tokens  # 切分后每个块的大小上限
-        self.max_llm_tokens = max_llm_tokens  # LLM 上下文窗口大小限制
+        # 将所有连续的空白字符（包括\n, \r, \t, 空格等）替换为单个空格，并去除首尾空格
+        self.book_content = LLMSplitter._normalize_text(book_content)
+        self.chunk_tokens = chunk_tokens
+        self.max_llm_tokens = max_llm_tokens
+        self.chunk_overlap = chunk_overlap # 分块重叠部分的 token 数量
         self.chunks = []
         self.token_counter = tiktoken.get_encoding("cl100k_base")
-        self.tokens_num = len(self.token_counter.encode(book_content))  # 计算书本内容的 token 数量
-        print(f"Book content token count: {self.tokens_num}")
+        self.tokens_num = len(self.token_counter.encode(self.book_content)) # 使用处理后的 book_content 计算 tokens
+        print(f"Book content token count (after normalization): {self.tokens_num}")
+        self.initial_chunks = []
+        if self.tokens_num + 1000 > max_llm_tokens:
+            text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_llm_tokens * 4,  # 留出一些空间给提示词和回复
+            chunk_overlap=self.chunk_overlap,
+            length_function=len
+        )
+            self.initial_chunks = text_splitter.split_text(book_content)
+            self.initial_chunks = [LLMSplitter._normalize_text(chunk) for chunk in self.initial_chunks if chunk.strip()]
+            print(f"Initial chunks number: {len(self.initial_chunks)}")
+            
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        if not text:
+            return ""
+        # 移除不可见字符
+        text = ''.join(c for c in text if unicodedata.category(c) not in ('Cc', 'Cf') or c in [' ', '\t', '\n'])
+        # 标准化 Unicode 字符
+        text = unicodedata.normalize('NFKC', text)
+        # 替换连续的空白字符为单个空格，并去除首尾空格
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
     
     def set_prompt_directly(self, content: str) -> str:
         """设置让 LLM 直接输出分块内容的提示词"""
@@ -740,25 +1170,29 @@ class LLMSpliter():
     
     def set_prompt_boundaries(self, content: str) -> str:
         """设置让 LLM 输出分块边界的提示词"""
+        # 'content' 参数是 self.book_content 的一部分，已经经过了空白标准化处理
         prompt = f"""
-        You are a professional text processing assistant. Please identify the semantic chunk boundaries in the following text.
+        You are a professional text processing assistant. Your task is to identify semantic chunk boundaries in the following text.
+        The provided text has ALREADY BEEN PROCESSED: all newline characters and other forms of whitespace have been converted into single spaces, and any leading/trailing whitespace has been removed.
 
         Requirements:
         1. Each chunk should be semantically coherent, representing a complete part of the story or content.
-        2. The token count of each chunk must not exceed {self.chunk_tokens} tokens. However, if necessary to maintain semantic coherence, the token count may slightly exceed this limit.
-        3. Prefer marking chunk boundaries at chapter boundaries or paragraph boundaries.
-        4. Chunk boundaries must be complete sentences or paragraphs that exist in the original text.
+        2. The token count of each chunk (based on the provided, processed text) must not exceed {self.chunk_tokens} tokens. Slight deviations are acceptable if necessary to maintain semantic coherence.
+        3. Prefer marking chunk boundaries at natural breaks in the text, such as the end of paragraphs or significant topic shifts, as they appear in the processed text.
+        4. Chunk boundaries MUST be EXACT VERBATIM SUBSTRINGS of the provided 'Text to be divided' below.
         5. The length of each chunk should be relatively balanced, but semantic coherence is more important.
 
-        Note:
-        - The boundary text must match the original text exactly, including punctuation, spaces, line breaks, and other special characters.
-        - Ensure that the boundary text is extracted verbatim from the original text to allow accurate location in the original document.
+        CRITICALLY IMPORTANT - Adhere to these rules for boundary text:
+        - The boundary text you return MUST be an EXACT character-for-character match from the 'Text to be divided'.
+        - Do NOT add, remove, or change ANY characters, including punctuation or spacing, from how it appears in the provided text.
+        - Do NOT attempt to reconstruct or infer original formatting (like newlines) that is NOT present in the input text.
+        - Ensure the boundary string itself does not have any leading or trailing whitespace beyond what is part of the exact match in the provided text.
 
-        Please return only the chunk boundaries (the ending sentence of each chunk) in the following format:
+        Please return only the chunk boundaries (the ending sentence or phrase of each chunk) in the following JSON format:
         {{
             "boundaries": [
-                "The last sentence of the first chunk (must match the original text exactly)",
-                "The last sentence of the second chunk (must match the original text exactly)",
+                "Exact verbatim ending phrase of the first chunk, copied precisely from the provided text",
+                "Exact verbatim ending phrase of the second chunk, copied precisely from the provided text",
                 ...
             ]
         }}
@@ -766,6 +1200,8 @@ class LLMSpliter():
         Here is the text to be divided:
 
         {content}
+        
+        **If you cannot identify any suitable boundaries, return an empty JSON array: `{{ "boundaries": [] }}`**
         """
         return prompt
     
@@ -812,74 +1248,99 @@ class LLMSpliter():
         
         # 文档长度在 LLM 处理范围内，直接处理
         prompt = self.set_prompt_boundaries(self.book_content)
-        response = self.llm.generate(prompt)
-        print("LLM response:")
-        print(response)
         
-        if not response:
-            raise ValueError("LLM 返回空响应，请检查配置或输入内容")
+        # 增加重试机制
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.llm.generate(prompt)
+                print("LLM response:")
+                print(response)
+                
+                if not response:
+                    print(f"LLM 返回空响应，第 {attempt + 1} 次重试")
+                    continue  # 重试
+                
+                try:
+                    # 尝试从响应中提取 JSON
+                    import re
+                    import json
+                    
+                    # 查找 JSON 对象
+                    match = re.search(r'\{[\s\S]*?\}', response)
+                    if not match:
+                        raise ValueError("未能在LLM响应中找到有效的JSON对象")
+                    
+                    json_str = match.group(0)
+                    result = json.loads(json_str)
+                    
+                    if not isinstance(result, dict) or "boundaries" not in result:
+                        raise ValueError("LLM响应中的JSON格式不正确，未找到'boundaries'字段")
+                    
+                    # 根据边界在原文中切分
+                    boundaries = result["boundaries"]
+                    return self._split_by_boundaries(self.book_content, boundaries)
+                    
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"解析LLM响应失败: {e}")
+            
+            except Exception as e:
+                print(f"发生错误: {e}")
         
-        try:
-            # 尝试从响应中提取 JSON
-            import re
-            import json
-            
-            # 查找 JSON 对象
-            match = re.search(r'\{[\s\S]*?\}', response)
-            if not match:
-                raise ValueError("未能在LLM响应中找到有效的JSON对象")
-            
-            json_str = match.group(0)
-            result = json.loads(json_str)
-            
-            if not isinstance(result, dict) or "boundaries" not in result:
-                raise ValueError("LLM响应中的JSON格式不正确，未找到'boundaries'字段")
-            
-            # 根据边界在原文中切分
-            boundaries = result["boundaries"]
-            return self._split_by_boundaries(self.book_content, boundaries)
-            
-        except json.JSONDecodeError as e:
-            raise ValueError(f"解析LLM响应失败: {e}")
+        # 如果所有重试都失败，则抛出异常
+        raise ValueError("LLM 多次返回空响应或发生错误，请检查配置或输入内容")
     
     def _split_by_boundaries(self, text: str, boundaries: list[str]) -> list[str]:
         """根据边界在原文中切分"""
         chunks = []
-        remaining_text = text.replace('\n', ' ').strip()  # 替换换行符并去除首尾空格
-        
-        for boundary in boundaries:
-            print(f"Processing boundary: {boundary}")
-            # 确保边界文本存在于原文中
-            if boundary not in remaining_text:
-                print(f"Boundary '{boundary}' not found in remaining text, skipping.")
+        # 'text' 参数通常是 self.book_content，它在 __init__ 中已经被标准化处理。
+        # 为确保一致性，如果 text 可能来自其他地方，也应进行相同的处理。
+        # 但在此上下文中，text 就是 self.book_content。
+        remaining_text = text
+
+        for raw_boundary in boundaries:
+            # 对LLM返回的边界也进行同样的标准化处理，以应对LLM可能产生的微小空白差异
+            # boundary = re.sub(r'\s+', ' ', raw_boundary).strip()
+            boundary = LLMSplitter._normalize_text(raw_boundary)
+            if len(boundary) > 100:
+                boundary = boundary[-100:]  # 只取最后100个字符，避免过长的边界
+            
+            print(f"Processing boundary (raw from LLM): '{raw_boundary}'")
+            print(f"Processing boundary (normalized): '{boundary}'")
+
+            if not boundary: # 跳过空边界
+                print("Skipping empty or whitespace-only boundary.")
                 continue
                 
-            # 找到边界位置
-            split_pos = remaining_text.find(boundary) + len(boundary)
-            
-            # 切分文本
-            chunk = remaining_text[:split_pos]
-            chunks.append(chunk)
-            
-            # 更新剩余文本
-            remaining_text = remaining_text[split_pos:]
+            try:
+                # 在标准化后的文本中查找标准化后的边界
+                split_idx = remaining_text.index(boundary) 
+                # split_pos = split_idx + len(boundary)
+                
+                # chunk = remaining_text[:split_pos]
+                if split_idx > 0:
+                    chunk = remaining_text[:split_idx]
+                    chunks.append(chunk)
+                    remaining_text = remaining_text[split_idx:]
+                    print(f"Successfully split at boundary. Remaining text starts with: '{remaining_text[:100]}...'")
+            except ValueError: # 如果 .index() 找不到子字符串，会引发 ValueError
+                print(f"Boundary (normalized) '{boundary}' NOT FOUND in remaining text.")
+                print(f"Remaining text sample (first 500 chars): '{remaining_text[:500]}'")
+                # 此处可以添加更详细的日志记录或错误处理策略
+                continue 
         
-        # 添加最后一块
-        if remaining_text.strip():
+        if remaining_text.strip(): # 添加最后剩余的文本块
             chunks.append(remaining_text)
+            
+        print(f"Initial chunks number: {len(boundaries)}")
+        print(f"Final chunks number: {len(chunks)}")
         
         self.chunks = chunks
         return chunks
     
     def _process_long_document_directly(self) -> list[str]:
         """处理超长文档 - 直接输出方式"""
-        # 使用简单的字符分割先将文档切成较小的块
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.max_llm_tokens * 4,  # 留出一些空间给提示词和回复
-            chunk_overlap=self.chunk_overlap,
-            length_function=len
-        )
-        initial_chunks = text_splitter.split_text(self.book_content)
+        initial_chunks = self.initial_chunks
         
         all_chunks = []
         for chunk in initial_chunks:
@@ -908,18 +1369,13 @@ class LLMSpliter():
     def _process_long_document_by_boundaries(self) -> list[str]:
         """处理超长文档 - 边界切分方式"""
         # 使用简单的字符分割先将文档切成较小的块
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.max_llm_tokens * 3,
-            chunk_overlap=self.chunk_overlap,
-            length_function=len
-        )
-        initial_chunks = text_splitter.split_text(self.book_content)
+        initial_chunks = self.initial_chunks
         
         all_boundaries = []
         for i, chunk in enumerate(initial_chunks):
             # 最后一块不需要找边界
-            if i == len(initial_chunks) - 1:
-                continue
+            # if i == len(initial_chunks) - 1:
+            #     continue
                 
             prompt = self.set_prompt_boundaries(chunk)
             response = self.llm.generate(prompt)
@@ -938,8 +1394,9 @@ class LLMSpliter():
                 if isinstance(result, dict) and "boundaries" in result:
                     # 只取最后一个边界，作为当前块的结束
                     if result["boundaries"]:
-                        all_boundaries.append(result["boundaries"][-1])
+                        all_boundaries.extend(result["boundaries"])  # 只取最后一个边界
             except:
+                print(f"Failed to split chunk {i+1}, skipping...")
                 continue
         
         # 根据所有收集到的边界切分原始文本
@@ -952,6 +1409,10 @@ class LLMSpliter():
         if not self.chunks:
             raise ValueError("没有可保存的文本块，请先运行切分方法")
         
+        import shutil
+        if os.path.exists(output_dir):
+            # 先删除目录下的所有文件
+            shutil.rmtree(output_dir)
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
         
@@ -962,3 +1423,221 @@ class LLMSpliter():
                 f.write(chunk)
         
         print(f"已将{len(self.chunks)}个文本块保存到 {output_dir} 目录")
+        
+    def set_prompt_chapter_titles(self, content: str) -> str:
+        """设置让 LLM 输出章节标题和级别的提示词"""
+        prompt = f"""
+        You are a professional text processing assistant. Your task is to identify chapter titles and their hierarchical levels in the following text for the purpose of text chunking.
+
+        CRITICAL REQUIREMENTS:
+        1. Extract chapter titles EXACTLY as they appear in the original text
+        2. Preserve ALL formatting: punctuation, capitalization, spacing, line breaks, and special characters
+        3. Each title must be findable in the original text using exact string matching
+        4. Do NOT modify, normalize, or clean up the titles in any way
+        5. Assign hierarchical levels to each title
+
+        Requirements:
+        1. Analyze the text and identify chapter titles and their hierarchical levels
+        2. Level 1: Book title/main title (if present)
+        3. Level 2: Part/Section titles (if any)  
+        4. Level 3+: Chapter titles and sub-chapters
+        5. Ignore table of contents - extract titles from the actual content
+        6. If a title spans multiple lines, preserve the exact line breaks as they appear
+        7. For very simple titles (single words/numbers like "I", "1", "One", etc.), connect the title with the first following sentence using "\n" to make them more identifiable
+        For example, if the title is "I" and the first sentence is "The story begins", return it as "I\nThe story begins". If the title is "1" and the first sentence is "The sun was shining brightly", return it as "1\nThe sun was shining brightly". If the title is "One" and the first sentence is "The story begins", return it as "One\nThe story begins". This helps LLMs recognize them as titles.
+
+        IMPORTANT: The returned titles must match the original text character-for-character, including:
+        - All punctuation marks (., -, :, ;, !, ?, etc.)
+        - All spacing and whitespace
+        - All line breaks (\\n)
+        - All capitalization
+        - All special characters
+
+        Text to analyze:
+        {content}
+
+        Return ONLY a JSON array in this format:
+        {{
+            "chapter_titles": [
+                {{"title": "Exact title as it appears in original text", "level": 1}},
+                {{"title": "Exact title as it appears in original text", "level": 2}},
+                {{"title": "Exact title as it appears in original text", "level": 3}},
+                ...
+            ]
+        }}
+
+        If no suitable chapter titles are found, return: {{"chapter_titles": []}}
+        """
+        return prompt
+    
+    def generate_chunks_by_chapters(self) -> list[str]:
+        """让 LLM 输出章节标题和级别，然后以最高级别章节为边界进行切分"""
+        # 如果文本超过 LLM 处理上限，先进行分块处理
+        if self.tokens_num > self.max_llm_tokens:
+            return self._process_long_document_by_chapters()
+        
+        # 文档长度在 LLM 处理范围内，直接处理
+        prompt = self.set_prompt_chapter_titles(self.book_content)
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.llm.generate(prompt)
+                print(f"\n=== LLM Chapter Title Response (Attempt {attempt + 1}) ===")
+                print(response)
+                
+                if not response or not response.strip():
+                    print(f"Empty response on attempt {attempt + 1}")
+                    if attempt == max_retries - 1:
+                        print("All attempts failed, falling back to semantic boundaries")
+                        return self.generate_chunks_by_boundaries()
+                    continue
+                
+                # 解析响应
+                chapter_data = self._parse_chapter_titles_with_levels(response)
+                if chapter_data is not None:
+                    if not chapter_data:
+                        print("LLM returned empty chapter titles list")
+                        print("Falling back to semantic boundaries")
+                        return self.generate_chunks_by_boundaries()
+                    else:
+                        # 找到最高级别（数值最大）的章节标题
+                        highest_level_titles = self._extract_highest_level_titles(chapter_data)
+                        print(f"LLM returned {len(chapter_data)} total chapter titles")
+                        print(f"Using {len(highest_level_titles)} highest-level titles as boundaries")
+                        return self._split_by_boundaries(self.book_content, highest_level_titles)
+                else:
+                    print(f"Failed to parse response on attempt {attempt + 1}")
+                    if attempt == max_retries - 1:
+                        print("All parsing attempts failed, falling back to semantic boundaries")
+                        return self.generate_chunks_by_boundaries()
+                    
+            except Exception as e:
+                print(f"Error on attempt {attempt + 1}: {str(e)}")
+                if attempt == max_retries - 1:
+                    print("All attempts failed due to errors, falling back to semantic boundaries")
+                    return self.generate_chunks_by_boundaries()
+                continue
+    
+    def _parse_chapter_titles_with_levels(self, response: str) -> list[dict] | None:
+        """解析 LLM 的章节标题和级别响应"""
+        if not response or not response.strip():
+            return None
+        
+        try:
+            # 查找 JSON 对象
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if not json_match:
+                print("No JSON object found in response")
+                return None
+            
+            json_str = json_match.group(0)
+            result = json.loads(json_str)
+            
+            if not isinstance(result, dict) or "chapter_titles" not in result:
+                print("Invalid JSON structure, missing 'chapter_titles' key")
+                return None
+            
+            titles_list = result["chapter_titles"]
+            if not isinstance(titles_list, list):
+                print("'chapter_titles' is not a list")
+                return None
+            
+            # 验证每个标题项的格式
+            valid_titles = []
+            for item in titles_list:
+                if (isinstance(item, dict) and 
+                    "title" in item and 
+                    "level" in item and
+                    item["title"].strip()):
+                    valid_titles.append({
+                        "title": str(item["title"]),
+                    "level": int(item["level"])
+                    })
+            
+            return valid_titles
+            
+        except json.JSONDecodeError as e:
+            print(f"JSON parsing error: {e}")
+            return None
+        except Exception as e:
+            print(f"Unexpected error parsing response: {e}")
+            return None
+    
+    def _extract_highest_level_titles(self, chapter_data: list[dict]) -> list[str]:
+        """提取最高级别（数值最大）的章节标题"""
+        if not chapter_data:
+            return []
+        
+        # 找到最高级别（数值最大）
+        max_level = max(item["level"] for item in chapter_data)
+        
+        # 过滤出最高级别的标题，跳过书籍标题（level 1）
+        if max_level > 1:
+            highest_level_titles = [
+                item["title"] for item in chapter_data 
+                if item["level"] == max_level
+            ]
+        else:
+            # 如果只有书籍标题，返回空列表
+            highest_level_titles = []
+        
+        print(f"Found titles at levels: {sorted(set(item['level'] for item in chapter_data))}")
+        print(f"Using level {max_level} titles as boundaries: {len(highest_level_titles)} titles")
+        
+        # 打印前几个标题作为示例
+        if highest_level_titles:
+            print("Sample highest-level titles:")
+            for i, title in enumerate(highest_level_titles):
+                print(f"  {i+1}. '{title}'")
+        
+        return highest_level_titles
+    
+    def _process_long_document_by_chapters(self) -> list[str]:
+        """处理超长文档 - 章节标题切分方式"""
+        initial_chunks = self.initial_chunks
+        
+        all_chapter_data = []
+        for i, chunk in enumerate(initial_chunks):
+            print(f"Processing chunk {i+1}/{len(initial_chunks)} for chapter titles")
+            
+            prompt = self.set_prompt_chapter_titles(chunk)
+            response = self.llm.generate(prompt)
+            
+            if not response:
+                continue
+            
+            try:
+                chapter_data = self._parse_chapter_titles_with_levels(response)
+                if chapter_data:
+                    all_chapter_data.extend(chapter_data)
+                    print(f"Extracted {len(chapter_data)} chapter titles from chunk {i+1}")
+                
+            except Exception as e:
+                print(f"Error processing chunk {i+1}: {e}")
+                continue
+        
+        if not all_chapter_data:
+            print("No chapter titles found in any chunk, falling back to semantic boundaries")
+            return self.generate_chunks_by_boundaries()
+        
+        # 去重章节标题（保持顺序）
+        unique_chapter_data = []
+        seen_titles = set()
+        for item in all_chapter_data:
+            title = item["title"]
+            if title not in seen_titles:
+                unique_chapter_data.append(item)
+                seen_titles.add(title)
+        
+        print(f"Found {len(unique_chapter_data)} unique chapter titles")
+        
+        # 提取最高级别的章节标题
+        highest_level_titles = self._extract_highest_level_titles(unique_chapter_data)
+        
+        if not highest_level_titles:
+            print("No suitable chapter titles found, falling back to semantic boundaries")
+            return self.generate_chunks_by_boundaries()
+        
+        # 根据最高级别的章节标题切分原始文本
+        return self._split_by_boundaries(self.book_content, highest_level_titles)
