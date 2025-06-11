@@ -177,7 +177,6 @@ class Chapterizer:
             for idx, pattern in enumerate(self.CHAPTER_PATTERNS):
                 # 如果匹配成功
                 if pattern.match(line) and not any(ignore_pattern.match(line) for ignore_pattern in self.IGNORE_PATTERNS):
-                    # print(idx, prev_pattern_idx)
                     # 如果该正则表达式表达的章节的级别还未确定，设置为当前章节（栈顶）的级别+1
                     if pattern_level_dict[idx] is None:
                         pattern_level_dict[idx] = stk[-1] + 1
@@ -430,7 +429,7 @@ from .llm import LLM
 
 class LLMSplitter():
     """使用 LLM 将书本内容按语义切分为 chunks """
-    def __init__(self, llm: LLM, book_content: str, chunk_tokens=50000, max_llm_tokens=600000, chunk_overlap=0, max_retries=3, retry_delay=1.0, min_chunk_tokens_for_merge=100, max_chunk_tokens=2000):
+    def __init__(self, llm: LLM, book_content: str, chunk_tokens=50000, max_llm_tokens=100000, chunk_overlap=0, max_retries=3, retry_delay=1.0, min_chunk_tokens_for_merge=100, max_chunk_tokens_for_merge=20000):
         self.llm = llm
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         # 将所有连续的空白字符（包括\n, \r, \t, 空格等）替换为单个空格，并去除首尾空格
@@ -442,8 +441,7 @@ class LLMSplitter():
         self.chunks = []
         self.token_counter = tiktoken.get_encoding("cl100k_base")
         self.tokens_num = len(self.token_counter.encode(self.book_content)) # 使用处理后的 book_content 计算 tokens
-        print(f"Book content token count (after normalization): {self.tokens_num}")
-        self.initial_chunks = []
+        self.logger.info(f"Book content token count (after normalization): {self.tokens_num}")
         
         # 重试配置
         self.max_retries = max_retries
@@ -451,17 +449,7 @@ class LLMSplitter():
         
         # 小块合并配置
         self.min_chunk_tokens_for_merge = min_chunk_tokens_for_merge
-        self.max_chunk_tokens = max_chunk_tokens if max_chunk_tokens is not None else chunk_tokens
-        
-        if self.tokens_num > max_llm_tokens:
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=self.max_llm_tokens,  # 留出一些空间给提示词和回复
-                chunk_overlap=self.chunk_overlap,
-                length_function=self._count_tokens
-            )
-            self.initial_chunks = text_splitter.split_text(book_content)
-            # self.initial_chunks = [LLMSplitter._normalize_text(chunk) for chunk in self.initial_chunks if chunk.strip()]
-            print(f"Initial chunks number: {len(self.initial_chunks)}")
+        self.max_chunk_tokens_for_merge = max_chunk_tokens_for_merge if max_chunk_tokens_for_merge is not None else chunk_tokens
     
     def _count_tokens(self, text: str) -> int:
         """Accurately count tokens in a text string."""
@@ -477,24 +465,24 @@ class LLMSplitter():
         """带重试机制的 LLM 调用方法"""
         for attempt in range(self.max_retries):
             try:
-                print(f"[{operation_name}] Attempt {attempt + 1}/{self.max_retries}")
+                self.logger.info(f"[{operation_name}] Attempt {attempt + 1}/{self.max_retries}")
                 response = self.llm.generate(prompt)
                 
                 if response and response.strip():
-                    print(f"[{operation_name}] Success on attempt {attempt + 1}")
+                    self.logger.info(f"[{operation_name}] Success on attempt {attempt + 1}")
                     return response
                 else:
-                    print(f"[{operation_name}] Empty response on attempt {attempt + 1}")
+                    self.logger.info(f"[{operation_name}] Empty response on attempt {attempt + 1}")
                     
             except Exception as e:
-                print(f"[{operation_name}] Error on attempt {attempt + 1}: {str(e)}")
+                self.logger.info(f"[{operation_name}] Error on attempt {attempt + 1}: {str(e)}")
                 
             # 如果不是最后一次尝试，等待一段时间再重试
             if attempt < self.max_retries - 1:
-                print(f"[{operation_name}] Waiting {self.retry_delay} seconds before retry...")
+                self.logger.info(f"[{operation_name}] Waiting {self.retry_delay} seconds before retry...")
                 time.sleep(self.retry_delay)
         
-        print(f"[{operation_name}] All {self.max_retries} attempts failed")
+        self.logger.info(f"[{operation_name}] All {self.max_retries} attempts failed")
         return None
             
     @staticmethod
@@ -515,9 +503,24 @@ class LLMSplitter():
     def _remove_invisible_chars(s: str) -> str:
         """移除不可见字符"""
         if not isinstance(s, str):
-            print(f"Warning: {s} is not a string, type: {type(s)}")
+            self.logger.info(f"Warning: {s} is not a string, type: {type(s)}")
             return None
         return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
+    
+    def _parser_json_from_response(self, response: str) -> dict:
+        """从 LLM 响应中解析 JSON 字符串"""
+        response = self._remove_invisible_chars(response)
+        try:
+            # 使用正则表达式提取 JSON 字符串
+            match = re.search(r'\{[\s\S]*\}', response)
+            if not match:
+                raise ValueError("未能在LLM响应中找到有效的JSON对象")
+            json_str = match.group(0)
+            result = json.loads(json_str)
+            return result
+        except json.JSONDecodeError as e:
+            self.logger.error(f"解析LLM响应失败: {e}")
+            raise ValueError(f"解析LLM响应失败: {e}")
     
     def set_prompt_directly(self, content: str) -> str:
         """设置让 LLM 直接输出分块内容的提示词"""
@@ -635,22 +638,14 @@ class LLMSplitter():
         if not response:
             raise ValueError("LLM 多次调用失败，请检查配置或输入内容")
         
-        print("LLM response:")
-        print(response)
+        self.logger.info("LLM response:")
+        self.logger.info(response)
         
         response = self._remove_invisible_chars(response)
         
         try:
             # 尝试从响应中提取 JSON
-            match = re.search(r'\{[\s\S]*\}', response)
-            if not match:
-                raise ValueError("未能在LLM响应中找到有效的JSON对象")
-            
-            json_str = match.group(0)
-            result = json.loads(json_str)
-            
-            if not isinstance(result, dict) or "boundaries" not in result:
-                raise ValueError("LLM响应中的JSON格式不正确，未找到'boundaries'字段")
+            result = self._parser_json_from_response(response)
             
             # 根据边界在原文中切分
             boundaries = result["boundaries"]
@@ -681,11 +676,11 @@ class LLMSplitter():
                 # 只取前 100 个字符
                 boundary = boundary[:100]
             
-            print(f"Processing boundary (raw from LLM): '{raw_boundary}'")
-            print(f"Processing boundary (normalized): '{boundary}'")
+            self.logger.info(f"Processing boundary (raw from LLM): '{raw_boundary}'")
+            self.logger.info(f"Processing boundary (normalized): '{boundary}'")
 
             if not boundary: # 跳过空边界
-                print("Skipping empty or whitespace-only boundary.")
+                self.logger.info("Skipping empty or whitespace-only boundary.")
                 continue
                 
             try:
@@ -698,34 +693,40 @@ class LLMSplitter():
                     chunk = remaining_text[:split_idx]
                     chunks.append(chunk)
                     remaining_text = remaining_text[split_idx:]
-                    print(f"Successfully split at boundary. Remaining text starts with: '{remaining_text[:100]}...'")
+                    self.logger.info(f"Successfully split at boundary. Remaining text starts with: '{remaining_text[:100]}...'")
             except ValueError: # 如果 .index() 找不到子字符串，会引发 ValueError
-                print(f"Boundary (normalized) '{boundary}' NOT FOUND in remaining text.")
-                print(f"Remaining text sample (first 500 chars): '{remaining_text[:500]}'")
+                self.logger.info(f"Boundary (normalized) '{boundary}' NOT FOUND in remaining text.")
+                self.logger.info(f"Remaining text sample (first 500 chars): '{remaining_text[:500]}'")
                 # 此处可以添加更详细的日志记录或错误处理策略
                 continue 
         
         if remaining_text.strip(): # 添加最后剩余的文本块
             chunks.append(remaining_text)
             
-        print(f"Initial chunks number: {len(boundaries)}")
-        print(f"Final chunks number: {len(chunks)}")
+        self.logger.info(f"Initial chunks number: {len(boundaries)}")
+        self.logger.info(f"Final chunks number: {len(chunks)}")
         
         # self.chunks = chunks
         return chunks
     
     def _process_long_document_directly(self) -> list[str]:
         """处理超长文档 - 直接输出方式"""
-        initial_chunks = self.initial_chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_llm_tokens,
+            chunk_overlap=self.chunk_overlap,
+            length_function=self._count_tokens
+        )
+        initial_chunks = text_splitter.split_text(self.book_content)
+        self.logger.info(f"Initial chunks number: {len(initial_chunks)}")
         
         all_chunks = []
         for i, chunk in enumerate(initial_chunks):
-            print(f"Processing chunk {i+1}/{len(initial_chunks)} for direct chunking")
+            self.logger.info(f"Processing chunk {i+1}/{len(initial_chunks)} for direct chunking")
             prompt = self.set_prompt_directly(chunk)
             response = self._call_llm_with_retry(prompt, f"Direct chunking - chunk {i+1}")
             
             if not response:
-                print(f"Skipping chunk {i+1} due to LLM failure")
+                self.logger.info(f"Skipping chunk {i+1} due to LLM failure")
                 continue
             
             response = self._remove_invisible_chars(response)
@@ -733,7 +734,7 @@ class LLMSplitter():
             try:
                 match = re.search(r'\{[\s\S]*\}', response)
                 if not match:
-                    print(f"No JSON found in chunk {i+1} response")
+                    self.logger.info(f"No JSON found in chunk {i+1} response")
                     continue
                 
                 json_str = match.group(0)
@@ -741,9 +742,9 @@ class LLMSplitter():
                 
                 if isinstance(result, dict) and "chunks" in result:
                     all_chunks.extend(result["chunks"])
-                    print(f"Successfully processed chunk {i+1}, got {len(result['chunks'])} sub-chunks")
+                    self.logger.info(f"Successfully processed chunk {i+1}, got {len(result['chunks'])} sub-chunks")
             except Exception as e:
-                print(f"Failed to parse chunk {i+1} response: {e}")
+                self.logger.info(f"Failed to parse chunk {i+1} response: {e}")
                 continue
         
         self.chunks = all_chunks
@@ -755,16 +756,22 @@ class LLMSplitter():
     
     def _process_long_document_by_boundaries(self) -> list[str]:
         """处理超长文档 - 边界切分方式"""
-        initial_chunks = self.initial_chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_llm_tokens,
+            chunk_overlap=self.chunk_overlap,
+            length_function=self._count_tokens
+        )
+        initial_chunks = text_splitter.split_text(self.book_content)
+        self.logger.info(f"Initial chunks number: {len(initial_chunks)}")
         
         all_boundaries = []
         for i, chunk in enumerate(initial_chunks):
-            print(f"Processing chunk {i+1}/{len(initial_chunks)} for boundary detection")
+            self.logger.info(f"Processing chunk {i+1}/{len(initial_chunks)} for boundary detection")
             prompt = self.set_prompt_boundaries(chunk)
             response = self._call_llm_with_retry(prompt, f"Boundary detection - chunk {i+1}")
             
             if not response:
-                print(f"Skipping chunk {i+1} due to LLM failure")
+                self.logger.info(f"Skipping chunk {i+1} due to LLM failure")
                 continue
             
             response = self._remove_invisible_chars(response)
@@ -772,7 +779,7 @@ class LLMSplitter():
             try:
                 match = re.search(r'\{[\s\S]*\}', response)
                 if not match:
-                    print(f"No JSON found in chunk {i+1} response")
+                    self.logger.info(f"No JSON found in chunk {i+1} response")
                     continue
                 
                 json_str = match.group(0)
@@ -781,9 +788,9 @@ class LLMSplitter():
                 if isinstance(result, dict) and "boundaries" in result:
                     if result["boundaries"]:
                         all_boundaries.extend(result["boundaries"])
-                        print(f"Successfully processed chunk {i+1}, got {len(result['boundaries'])} boundaries")
+                        self.logger.info(f"Successfully processed chunk {i+1}, got {len(result['boundaries'])} boundaries")
             except Exception as e:
-                print(f"Failed to parse chunk {i+1} response: {e}")
+                self.logger.info(f"Failed to parse chunk {i+1} response: {e}")
                 continue
         
         # 根据所有收集到的边界切分原始文本
@@ -814,7 +821,7 @@ class LLMSplitter():
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(chunk)
         
-        print(f"已将{len(self.chunks)}个文本块保存到 {output_dir} 目录")
+        self.logger.info(f"已将{len(self.chunks)}个文本块保存到 {output_dir} 目录")
         
     def set_prompt_chapter_titles(self, content: str) -> str:
         """设置让 LLM 输出章节标题和级别的提示词"""
@@ -876,24 +883,24 @@ class LLMSplitter():
         response = self._call_llm_with_retry(prompt, "Chapter title extraction")
         
         if not response:
-            print("All chapter title extraction attempts failed, falling back to semantic boundaries")
+            self.logger.info("All chapter title extraction attempts failed, falling back to semantic boundaries")
             return self.generate_chunks_by_boundaries()
         
-        print(f"\n=== LLM Chapter Title Response ===")
-        print(response)
+        self.logger.info(f"\n=== LLM Chapter Title Response ===")
+        self.logger.info(response)
         
         # 解析响应
         chapter_data = self._parse_chapter_titles_with_levels(response)
         if chapter_data is not None:
             if not chapter_data:
-                print("LLM returned empty chapter titles list")
-                print("Falling back to semantic boundaries")
+                self.logger.info("LLM returned empty chapter titles list")
+                self.logger.info("Falling back to semantic boundaries")
                 return self.generate_chunks_by_boundaries()
             else:
                 # 从章节标题中提取可以作为分块边界的标题
                 boundaries = self._extract_boundaries_from_titles(chapter_data)
-                print(f"LLM returned {len(chapter_data)} total chapter titles")
-                print(f"Using {len(boundaries)} titles as boundaries")
+                self.logger.info(f"LLM returned {len(chapter_data)} total chapter titles")
+                self.logger.info(f"Using {len(boundaries)} titles as boundaries")
                 self.chunks = self._split_by_boundaries(self.book_content, boundaries)
                 
                 # 执行小块合并
@@ -901,7 +908,7 @@ class LLMSplitter():
                 
                 return self.chunks
         else:
-            print("Failed to parse chapter title response, falling back to semantic boundaries")
+            self.logger.info("Failed to parse chapter title response, falling back to semantic boundaries")
             return self.generate_chunks_by_boundaries()
     
     def _parse_chapter_titles_with_levels(self, response: str) -> list[dict] | None:
@@ -914,19 +921,19 @@ class LLMSplitter():
             # 查找 JSON 对象
             json_match = re.search(r'\{[\s\S]*\}', response)
             if not json_match:
-                print("No JSON object found in response")
+                self.logger.info("No JSON object found in response")
                 return None
             
             json_str = json_match.group(0)
             result = json.loads(json_str)
             
             if not isinstance(result, dict) or "chapter_titles" not in result:
-                print("Invalid JSON structure, missing 'chapter_titles' key")
+                self.logger.info("Invalid JSON structure, missing 'chapter_titles' key")
                 return None
             
             titles_list = result["chapter_titles"]
             if not isinstance(titles_list, list):
-                print("'chapter_titles' is not a list")
+                self.logger.info("'chapter_titles' is not a list")
                 return None
             
             # 验证每个标题项的格式
@@ -944,10 +951,10 @@ class LLMSplitter():
             return valid_titles
             
         except json.JSONDecodeError as e:
-            print(f"JSON parsing error: {e}")
+            self.logger.info(f"JSON parsing error: {e}")
             return None
         except Exception as e:
-            print(f"Unexpected error parsing response: {e}")
+            self.logger.info(f"Unexpected error parsing response: {e}")
             return None
     
     def _extract_highest_level_titles(self, chapter_data: list[dict]) -> list[str]:
@@ -968,14 +975,14 @@ class LLMSplitter():
             # 如果只有书籍标题，返回空列表
             highest_level_titles = []
         
-        print(f"Found titles at levels: {sorted(set(item['level'] for item in chapter_data))}")
-        print(f"Using level {max_level} titles as boundaries: {len(highest_level_titles)} titles")
+        self.logger.info(f"Found titles at levels: {sorted(set(item['level'] for item in chapter_data))}")
+        self.logger.info(f"Using level {max_level} titles as boundaries: {len(highest_level_titles)} titles")
         
         # 打印前几个标题作为示例
         if highest_level_titles:
-            print("Sample highest-level titles:")
+            self.logger.info("Sample highest-level titles:")
             for i, title in enumerate(highest_level_titles):
-                print(f"  {i+1}. '{title}'")
+                self.logger.info(f"  {i+1}. '{title}'")
         
         return highest_level_titles
     
@@ -997,7 +1004,7 @@ class LLMSplitter():
             else:
                 # 最后一个标题直接添加
                 boundaries.append(title)
-        print(f"Extracted {len(boundaries)} boundaries from chapter titles")
+        self.logger.info(f"Extracted {len(boundaries)} boundaries from chapter titles")
         return boundaries
     
     def set_prompt_merge_chapter_titles(self, chapter_titles_from_chunks: str) -> str:
@@ -1061,53 +1068,66 @@ class LLMSplitter():
 
     def _process_long_document_by_chapters(self) -> list[str]:
         """处理超长文档 - 章节标题切分方式"""
-        initial_chunks = self.initial_chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_llm_tokens,
+            chunk_overlap=self.chunk_overlap,
+            length_function=self._count_tokens
+        )
+        initial_chunks = text_splitter.split_text(self.book_content)
+        self.logger.info(f"Initial chunks number: {len(initial_chunks)}")
         
         all_chapter_data = []
         chapter_titles_from_chunks = ""
         
         for i, chunk in enumerate(initial_chunks):
-            print(f"Processing chunk {i+1}/{len(initial_chunks)} for chapter titles")
+            self.logger.info(f"Processing chunk {i+1}/{len(initial_chunks)} for chapter titles")
             
             prompt = self.set_prompt_chapter_titles(chunk)
             response = self._call_llm_with_retry(prompt, f"Chapter title extraction - chunk {i+1}")
             
             if not response:
-                print(f"Skipping chunk {i+1} due to LLM failure")
+                self.logger.info(f"Skipping chunk {i+1} due to LLM failure")
                 continue
             
             try:
                 chapter_data = self._parse_chapter_titles_with_levels(response)
                 if chapter_data:
                     # 打印提取到的章节标题
-                    print(f"Chunk {i+1} chapter titles:")
+                    self.logger.info(f"Chunk {i+1} chapter titles:")
                     for _, item in enumerate(chapter_data):
-                        print(f"Level {item['level']}: '{item['title']}'")
+                        self.logger.info(f"Level {item['level']}: '{item['title']}'")
                     all_chapter_data.extend(chapter_data)
-                    print(f"Extracted {len(chapter_data)} chapter titles from chunk {i+1}")
+                    self.logger.info(f"Extracted {len(chapter_data)} chapter titles from chunk {i+1}")
                     chapter_titles_from_chunks += f"Titles from chunk {i+1}:\n {json.dumps(chapter_data, ensure_ascii=False, indent=2)}\n"
                 
             except Exception as e:
-                print(f"Error processing chunk {i+1}: {e}")
+                self.logger.info(f"Error processing chunk {i+1}: {e}")
                 continue
         
         if not all_chapter_data:
-            print("No chapter titles found in any chunk, falling back to semantic boundaries")
+            self.logger.info("No chapter titles found in any chunk, falling back to semantic boundaries")
             return self.generate_chunks_by_boundaries()
 
         # 使用 LLM 合并章节标题
         merge_prompt = self.set_prompt_merge_chapter_titles(chapter_titles_from_chunks)
-        print("Merging chapter titles with LLM...")
-        response = self._call_llm_with_retry(merge_prompt, "Chapter title merging")
+        self.logger.info("Merging chapter titles with LLM...")
         
-        unique_chapter_data = []
-        if response and response.strip():
-            print("LLM merge response:")
-            print(response)
-            unique_chapter_data = self._parse_chapter_titles_with_levels(response)
+        i = 0
+        while i < self.max_retries:
+            response = self._call_llm_with_retry(merge_prompt, "Chapter title merging")
+    
+            unique_chapter_data = []
+            if response and response.strip():
+                self.logger.info("LLM merge response:")
+                self.logger.info(response)
+                unique_chapter_data = self._parse_chapter_titles_with_levels(response)
+                if unique_chapter_data is not None:
+                    break  # 成功解析，退出重试循环
+            self.logger.info(f"LLM merge response is empty or invalid on attempt {i+1}, retrying...")
+            i += 1
         
         if not unique_chapter_data:
-            print("Failed to merge chapter titles, using fallback method")
+            self.logger.info("Failed to merge chapter titles, using fallback method")
             # 备用合并方法
             seen_titles = set()
             for item in all_chapter_data:
@@ -1116,16 +1136,16 @@ class LLMSplitter():
                     unique_chapter_data.append(item)
                     seen_titles.add(title)
         
-        print(f"Found {len(unique_chapter_data)} unique chapter titles")
-        print("All chapter titles:")
+        self.logger.info(f"Found {len(unique_chapter_data)} unique chapter titles")
+        self.logger.info("All chapter titles:")
         for _, item in enumerate(unique_chapter_data):
-            print(f"Level {item['level']}: '{item['title']}'")
+            self.logger.info(f"Level {item['level']}: '{item['title']}'")
         
         # 从章节标题中提取可以作为分块边界的标题
         boundaries = self._extract_boundaries_from_titles(unique_chapter_data)
         
         if not boundaries:
-            print("No suitable chapter titles found, falling back to semantic boundaries")
+            self.logger.info("No suitable chapter titles found, falling back to semantic boundaries")
             return self.generate_chunks_by_boundaries()
         
         # 根据分块边界切分原始文本
@@ -1142,7 +1162,7 @@ class LLMSplitter():
             self.logger.info("Not enough chunks to perform merging or no chunks present.")
             return
 
-        self.logger.info(f"Starting post-merging of small chunks. Min tokens for a chunk to be considered small: < {self.min_chunk_tokens_for_merge}. Max combined tokens for merge: <= {self.max_chunk_tokens}")
+        self.logger.info(f"Starting post-merging of small chunks. Min tokens for a chunk to be considered small: < {self.min_chunk_tokens_for_merge}. Max combined tokens for merge: <= {self.max_chunk_tokens_for_merge}")
         
         merged_chunks: List[str] = []
         i = 0
@@ -1172,7 +1192,7 @@ class LLMSplitter():
                 next_tokens = self._count_tokens(next_chunk)
                 
                 # 检查合并后是否超过上限
-                if (combined_tokens + next_tokens) <= self.max_chunk_tokens:
+                if (combined_tokens + next_tokens) <= self.max_chunk_tokens_for_merge:
                     # 合并块
                     combined_chunk = (combined_chunk + " " + next_chunk).strip()
                     combined_tokens += next_tokens  # 这是一个近似值，实际token数可能因空格而略有不同
@@ -1201,7 +1221,7 @@ class LLMSplitter():
         else:
             self.logger.info("No small consecutive chunks were merged.")
 
-    def _split_recursive(self, text: str):
+    def split_recursive(self, text: str, by_chapter: bool = True):
         """递归分割文本"""
         if not text or not text.strip():
             return
@@ -1211,25 +1231,28 @@ class LLMSplitter():
         else:        
             # 文本长度超过 LLM 处理范围，提取前 max_tokens_num 个 token 从中寻找标题
             front_text = text[:self.max_llm_tokens * 4]
-        for _ in range(self.max_retries):
+        for i in range(self.max_retries):
             try:
-                prompt = self.set_prompt_chapter_titles(front_text)
+                prompt = self.set_prompt_chapter_titles(front_text) if by_chapter else self.set_prompt_boundaries(front_text)
                 response = self._call_llm_with_retry(prompt, "Recursive chunking")
                 if not response:
                     raise ValueError("Failed to get a valid response from LLM after multiple retries")
                 else:
-                    chapter_titles = self._parse_chapter_titles_with_levels(response)
-                    boundaries = self._extract_boundaries_from_titles(chapter_titles)
+                    if by_chapter:
+                        chapter_titles = self._parse_chapter_titles_with_levels(response)
+                        boundaries = self._extract_boundaries_from_titles(chapter_titles)
+                    else:
+                        boundaries = self._parser_json_from_response(response)['boundaries']
                     chunks = self._split_by_boundaries(text, boundaries)
                 if chunks:
-                    print(f"Successfully split text into {len(chunks)} chunks using LLM response.")
+                    self.logger.info(f"Successfully split text into {len(chunks)} chunks using LLM response.")
                     self.chunks.extend(chunks)
                     last_chunk = chunks[-1]
                     if self._count_tokens(last_chunk) <= self.chunk_tokens:
-                        # 如果最后一个大块小于等于 max_chunk_tokens ，则已经处理完成
+                        # 如果最后一个大块小于等于 max_chunk_tokens_for_merge ，则已经处理完成
                         self._merge_small_consecutive_chunks()
                         return
-                    elif len(chunks) == 1:
+                    elif len(chunks) == 1 and i >= self.max_retries:
                         # 如果只有一个大块，说明切分失败，直接使用 RecursiveCharacterTextSplitter 进行分割
                         self.chunks.pop()
                         text_splitter = RecursiveCharacterTextSplitter(
@@ -1242,239 +1265,16 @@ class LLMSplitter():
                         self._merge_small_consecutive_chunks()
                         return
                     else:
-                        print(f"Last chunk is too large ({self._count_tokens(last_chunk)} tokens), continuing recursive splitting.")
+                        self.logger.info(f"Last chunk is too large ({self._count_tokens(last_chunk)} tokens), continuing recursive splitting.")
                         self.chunks.pop()  # 移除最后一个大块，继续递归分割
-                        print(f"Now have {len(self.chunks)} chunks, continuing recursive splitting.")
-                        self._split_recursive(last_chunk)
+                        self.logger.info(f"Now there are {len(self.chunks)} chunks, continuing recursive splitting.")
+                        self.split_recursive(last_chunk, by_chapter=by_chapter)  # 递归处理最后一个大块
                 else:
                     raise ValueError("No chunks generated from LLM response")
                 return
             except Exception as e:
-                print(f"Error during recursive splitting: {e}, retrying...")
+                self.logger.info(f"Error during recursive splitting: {e}, retrying...")
                 continue
-        print("Reached maximum retries for recursive splitting, no valid chunks generated, treat total text as a single chunk.")
+        self.logger.info("Reached maximum retries for recursive splitting, no valid chunks generated, treat total text as a single chunk.")
         self.chunks.append(text)  # 如果所有尝试都失败，作为一个整体块加入到 self.chunks 中
         return
-            
-    
-    # def _extract_boundaries_from_titles(self, chapter_data: list[dict]) -> list[str]:
-    #     """从章节标题数据中提取边界字符串，支持层级标题构建"""
-    #     if not chapter_data:
-    #         return []
-        
-    #     boundaries = []
-    #     # 构建层级路径栈，类似 Chapterizer 的实现
-    #     title_stack = []  # 存储当前路径上的标题
-    #     level_stack = []  # 存储当前路径上的级别
-        
-    #     for idx, item in enumerate(chapter_data):
-    #         title = item["title"].strip()
-    #         level = item["level"]
-            
-    #         # 弹出栈中级别大于等于当前级别的标题
-    #         while level_stack and level <= level_stack[-1]:
-    #             title_stack.pop()
-    #             level_stack.pop()
-            
-    #         # 将当前标题加入栈
-    #         title_stack.append(title)
-    #         level_stack.append(level)
-            
-    #         # 构建层级标题键，类似 current_key + '_' + substructure['title']
-    #         hierarchical_title = '_'.join(title_stack)
-            
-    #         # 判断是否应该作为边界
-    #         if idx < len(chapter_data) - 1:
-    #             next_title_level = chapter_data[idx + 1]["level"]
-    #             if level >= next_title_level:
-    #                 # 如果当前标题的级别不小于下一个标题的级别，使用当前标题作为边界
-    #                 boundaries.append(title)  # 这里仍然使用原始标题作为边界文本
-    #                 # 可选：如果需要返回层级标题用于其他用途，可以保存到另一个列表
-    #                 # hierarchical_boundaries.append(hierarchical_title)
-    #         else:
-    #             # 最后一个标题直接添加
-    #             boundaries.append(title)
-        
-    #     print(f"Extracted {len(boundaries)} boundaries from chapter titles")
-    #     return boundaries
-
-    # def get_hierarchical_chapter_contents(self, chapter_data: list[dict], content_dict: dict = None) -> tuple[dict[str, str], list[str]]:
-    #     """
-    #     仿照 Chapterizer.get_chapter_contents 的实现，构建层级章节内容
-        
-    #     Args:
-    #         chapter_data (list[dict]): 章节标题数据，包含 title 和 level
-    #         content_dict (dict, optional): 标题到内容的映射，如果为None则返回空内容
-        
-    #     Returns:
-    #         tuple[dict[str, str], list[str]]: 层级章节内容字典和标题列表
-    #     """
-    #     if not chapter_data:
-    #         return {}, []
-        
-    #     result_dict = {}
-    #     result_list = []
-        
-    #     # 构建层级路径栈
-    #     title_stack = []
-    #     level_stack = []
-        
-    #     for item in chapter_data:
-    #         title = item["title"].strip()
-    #         level = item["level"]
-            
-    #         # 弹出栈中级别大于等于当前级别的标题
-    #         while level_stack and level <= level_stack[-1]:
-    #             title_stack.pop()
-    #             level_stack.pop()
-            
-    #         # 将当前标题加入栈
-    #         title_stack.append(title)
-    #         level_stack.append(level)
-            
-    #         # 构建层级标题键
-    #         hierarchical_key = '_'.join(title_stack)
-            
-    #         # 添加到结果中
-    #         if content_dict and title in content_dict:
-    #             result_dict[hierarchical_key] = content_dict[title]
-    #         else:
-    #             result_dict[hierarchical_key] = ""  # 空内容
-            
-    #         result_list.append(hierarchical_key)
-        
-    #     return result_dict, result_list
-
-    # def generate_chunks_by_chapters_with_hierarchy(self) -> tuple[list[str], dict[str, str], list[str]]:
-    #     """
-    #     让 LLM 输出章节标题和级别，然后构建层级关系并进行切分
-        
-    #     Returns:
-    #         tuple: (chunks, hierarchical_contents_dict, hierarchical_titles_list)
-    #     """
-    #     # 如果文本超过 LLM 处理上限，先进行分块处理
-    #     if self.tokens_num > self.max_llm_tokens:
-    #         return self._process_long_document_by_chapters_with_hierarchy()
-        
-    #     # 文档长度在 LLM 处理范围内，直接处理
-    #     prompt = self.set_prompt_chapter_titles(self.book_content)
-    #     response = self._call_llm_with_retry(prompt, "Chapter title extraction")
-        
-    #     if not response:
-    #         print("All chapter title extraction attempts failed, falling back to semantic boundaries")
-    #         chunks = self.generate_chunks_by_boundaries()
-    #         return chunks, {}, []
-        
-    #     print(f"\n=== LLM Chapter Title Response ===")
-    #     print(response)
-        
-    #     # 解析响应
-    #     chapter_data = self._parse_chapter_titles_with_levels(response)
-    #     if chapter_data is not None and chapter_data:
-    #         # 构建层级章节内容
-    #         hierarchical_contents, hierarchical_titles = self.get_hierarchical_chapter_contents(chapter_data)
-            
-    #         # 从章节标题中提取可以作为分块边界的标题
-    #         boundaries = self._extract_boundaries_from_titles(chapter_data)
-    #         print(f"LLM returned {len(chapter_data)} total chapter titles")
-    #         print(f"Using {len(boundaries)} titles as boundaries")
-    #         print(f"Generated {len(hierarchical_titles)} hierarchical titles:")
-    #         for i, htitle in enumerate(hierarchical_titles[:10]):  # 只打印前10个作为示例
-    #             print(f"  {i+1}. {htitle}")
-    #         if len(hierarchical_titles) > 10:
-    #             print(f"  ... and {len(hierarchical_titles) - 10} more")
-            
-    #         chunks = self._split_by_boundaries(self.book_content, boundaries)
-            
-    #         # 执行小块合并
-    #         self._merge_small_consecutive_chunks()
-            
-    #         return self.chunks, hierarchical_contents, hierarchical_titles
-    #     else:
-    #         print("Failed to parse chapter title response, falling back to semantic boundaries")
-    #         chunks = self.generate_chunks_by_boundaries()
-    #         return chunks, {}, []
-
-    # def _process_long_document_by_chapters_with_hierarchy(self) -> tuple[list[str], dict[str, str], list[str]]:
-    #     """处理超长文档 - 章节标题切分方式（支持层级）"""
-    #     initial_chunks = self.initial_chunks
-        
-    #     all_chapter_data = []
-    #     chapter_titles_from_chunks = ""
-        
-    #     for i, chunk in enumerate(initial_chunks):
-    #         print(f"Processing chunk {i+1}/{len(initial_chunks)} for chapter titles")
-            
-    #         prompt = self.set_prompt_chapter_titles(chunk)
-    #         response = self._call_llm_with_retry(prompt, f"Chapter title extraction - chunk {i+1}")
-            
-    #         if not response:
-    #             print(f"Skipping chunk {i+1} due to LLM failure")
-    #             continue
-            
-    #         try:
-    #             chapter_data = self._parse_chapter_titles_with_levels(response)
-    #             if chapter_data:
-    #                 print(f"Chunk {i+1} chapter titles:")
-    #                 for _, item in enumerate(chapter_data):
-    #                     print(f"Level {item['level']}: '{item['title']}'")
-    #                 all_chapter_data.extend(chapter_data)
-    #                 print(f"Extracted {len(chapter_data)} chapter titles from chunk {i+1}")
-    #                 chapter_titles_from_chunks += f"Titles from chunk {i+1}:\n {json.dumps(chapter_data, ensure_ascii=False, indent=2)}\n"
-                
-    #         except Exception as e:
-    #             print(f"Error processing chunk {i+1}: {e}")
-    #             continue
-        
-    #     if not all_chapter_data:
-    #         print("No chapter titles found in any chunk, falling back to semantic boundaries")
-    #         chunks = self.generate_chunks_by_boundaries()
-    #         return chunks, {}, []
-
-    #     # 使用 LLM 合并章节标题
-    #     merge_prompt = self.set_prompt_merge_chapter_titles(chapter_titles_from_chunks)
-    #     print("Merging chapter titles with LLM...")
-    #     response = self._call_llm_with_retry(merge_prompt, "Chapter title merging")
-        
-    #     unique_chapter_data = []
-    #     if response and response.strip():
-    #         print("LLM merge response:")
-    #         print(response)
-    #         unique_chapter_data = self._parse_chapter_titles_with_levels(response)
-        
-    #     if not unique_chapter_data:
-    #         print("Failed to merge chapter titles, using fallback method")
-    #         # 备用合并方法
-    #         seen_titles = set()
-    #         for item in all_chapter_data:
-    #             title = item["title"]
-    #             if title not in seen_titles:
-    #                 unique_chapter_data.append(item)
-    #                 seen_titles.add(title)
-        
-    #     print(f"Found {len(unique_chapter_data)} unique chapter titles")
-        
-    #     # 构建层级章节内容
-    #     hierarchical_contents, hierarchical_titles = self.get_hierarchical_chapter_contents(unique_chapter_data)
-        
-    #     print("Hierarchical chapter structure:")
-    #     for i, htitle in enumerate(hierarchical_titles[:10]):  # 只打印前10个作为示例
-    #         print(f"  {i+1}. {htitle}")
-    #     if len(hierarchical_titles) > 10:
-    #         print(f"  ... and {len(hierarchical_titles) - 10} more")
-        
-    #     # 从章节标题中提取可以作为分块边界的标题
-    #     boundaries = self._extract_boundaries_from_titles(unique_chapter_data)
-        
-    #     if not boundaries:
-    #         print("No suitable chapter titles found, falling back to semantic boundaries")
-    #         chunks = self.generate_chunks_by_boundaries()
-    #         return chunks, {}, []
-        
-    #     # 根据分块边界切分原始文本
-    #     chunks = self._split_by_boundaries(self.book_content, boundaries)
-        
-    #     # 执行小块合并
-    #     self._merge_small_consecutive_chunks()
-        
-    #     return self.chunks, hierarchical_contents, hierarchical_titles

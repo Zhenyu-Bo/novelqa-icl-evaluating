@@ -2,9 +2,7 @@ import os
 import re
 import json
 import logging
-import unicodedata
 import tiktoken
-import time # Required by LLMSplitter
 from typing import List, Dict, Optional
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -24,13 +22,14 @@ class HybridSplitter:
     """
     def __init__(self,
                  book_content: str,
-                 book_title: str,
                  llm: LLM,
+                 book_title: str = "Unknown",
                  max_chunk_tokens: int = 50000,
-                 llm_splitter_max_llm_tokens: int = 600000,
-                 llm_splitter_chunk_overlap: int = 0,
-                 llm_splitter_max_retries: int = 3,
+                 llm_splitter_max_llm_tokens: int = 100000,
+                 llm_splitter_chunk_overlap: int = 100,
+                 llm_splitter_max_retries: int = 5,
                  llm_splitter_retry_delay: float = 1.0,
+                 llm_splitter_max_chunk_tokens_for_merge: int = 20000,
                  llm_splitter_min_chunk_tokens_for_merge: int = 50,
                  char_overlap_fallback: int = 50,
                  chars_per_token_estimate: float = 3.5
@@ -45,6 +44,7 @@ class HybridSplitter:
         self.llm_splitter_chunk_overlap = llm_splitter_chunk_overlap
         self.llm_splitter_max_retries = llm_splitter_max_retries
         self.llm_splitter_retry_delay = llm_splitter_retry_delay
+        self.llm_splitter_max_chunk_tokens_for_merge = llm_splitter_max_chunk_tokens_for_merge
         self.llm_splitter_min_chunk_tokens_for_merge = llm_splitter_min_chunk_tokens_for_merge
         
         # Parameters for RecursiveCharacterTextSplitter fallback
@@ -58,6 +58,7 @@ class HybridSplitter:
             self.logger.warning(f"Failed to get tiktoken encoding cl100k_base: {e}. Token counting might be less accurate.")
             self.token_counter = None # Fallback if tiktoken is not available or fails
 
+        self.total_tokens = self._count_tokens(book_content)
         self.final_chunks: List[str] = []
 
     def _count_tokens(self, text: str) -> int:
@@ -74,19 +75,6 @@ class HybridSplitter:
             # Fallback if tiktoken is not available
             return int(len(text) / self.chars_per_token_estimate) if self.chars_per_token_estimate > 0 else len(text) // 4
 
-
-    def _collect_chapterizer_segments(self, node: Dict, segments_list: List[str]):
-        """
-        递归遍历 Chapterizer 的结构树，收集每个节点的内容。
-        Chapterizer 中每个节点的 'content' 字段包含其标题行及其后的文本，
-        直到下一个子章节开始或该部分的结束。
-        """
-        if node.get('content') and node['content'].strip():
-            segments_list.append(node['content'])
-        
-        for sub_structure in node.get('structures', []):
-            self._collect_chapterizer_segments(sub_structure, segments_list)
-
     def split(self) -> List[str]:
         """执行混合分块过程。"""
         self.logger.info(f"Starting hybrid splitting for book: {self.book_title}")
@@ -95,14 +83,21 @@ class HybridSplitter:
         initial_chunks_from_chapterizer = []
         try:
             chapterizer = Chapterizer(self.book_content, self.book_title)
-            if chapterizer.structure:
-                self._collect_chapterizer_segments(chapterizer.structure, initial_chunks_from_chapterizer)
+            
+            markdown = chapterizer.to_markdown()  # 生成章节标题的 Markdown 格式
+            self.logger.info(f"Generated chapter structure for {self.book_title}:\n{markdown}")
+            chapterizer.structure_from_markdown(markdown)  # 章节化
+
+            chapter_dict, chapter_list = chapterizer.get_chapter_contents(level=0)
+            
+            # 将章节内容转换为列表
+            initial_chunks_from_chapterizer = [chapter_dict[chapter] for chapter in chapter_list if chapter_dict[chapter].strip()]
             
             if not initial_chunks_from_chapterizer and self.book_content and self.book_content.strip():
                 self.logger.warning("Chapterizer did not produce any segments from non-empty content. Using full book content as one initial chunk.")
                 initial_chunks_from_chapterizer = [self.book_content]
-            elif not initial_chunks_from_chapterizer: # Handles empty or whitespace-only book_content
-                 initial_chunks_from_chapterizer = []
+            elif not initial_chunks_from_chapterizer:
+                initial_chunks_from_chapterizer = []
 
             self.logger.info(f"Chapterizer produced {len(initial_chunks_from_chapterizer)} initial segments.")
 
@@ -112,7 +107,6 @@ class HybridSplitter:
                 initial_chunks_from_chapterizer = [self.book_content]
             else:
                 initial_chunks_from_chapterizer = []
-
 
         # 2. 处理初步切分后的块，对过大的块进行二次切分
         processed_chunks_accumulator = []
@@ -133,20 +127,21 @@ class HybridSplitter:
                 sub_splitter = LLMSplitter(
                     llm=self.llm,
                     book_content=chunk_text, # 当前过大的块
-                    chunk_tokens=self.max_chunk_tokens, # LLM 切分时的目标 token 数
+                    chunk_tokens=self.max_chunk_tokens, # LLM 切分时的分块最大 token 数
                     max_llm_tokens=self.llm_splitter_max_llm_tokens,
                     chunk_overlap=self.llm_splitter_chunk_overlap,
                     max_retries=self.llm_splitter_max_retries,
                     retry_delay=self.llm_splitter_retry_delay,
                     min_chunk_tokens_for_merge=self.llm_splitter_min_chunk_tokens_for_merge,
-                    max_chunk_tokens=self.max_chunk_tokens # LLMSplitter 内部合并小块时的最大 token 数
+                    max_chunk_tokens_for_merge=self.llm_splitter_max_chunk_tokens_for_merge # LLMSplitter 内部合并小块时的最大 token 数
                 )
                 
                 sub_split_chunks: Optional[List[str]] = None
                 # 2a. 尝试使用 LLM 按章节标题切分
                 try:
                     self.logger.debug(f"Attempting LLM-based chapter splitting for oversized segment {i+1}.")
-                    sub_split_chunks = sub_splitter.generate_chunks_by_chapters()
+                    sub_splitter.split_recursive(chunk_text, by_chapter=True) # 使用 LLM 切分章节
+                    sub_split_chunks = sub_splitter.chunks
                     if not sub_split_chunks or not any(s.strip() for s in sub_split_chunks):
                         self.logger.warning(f"LLM chapter splitting yielded no valid sub-chunks for segment {i+1}.")
                         sub_split_chunks = None 
@@ -160,26 +155,27 @@ class HybridSplitter:
                 if sub_split_chunks is None:
                     try:
                         self.logger.debug(f"Attempting LLM-based boundary splitting for oversized segment {i+1}.")
-                        sub_split_chunks = sub_splitter.generate_chunks_by_boundaries()
+                        sub_splitter.split_recursive(chunk_text, by_chapter=False) # 使用 LLM 按语义边界切分
+                        sub_split_chunks = sub_splitter.chunks
                         if not sub_split_chunks or not any(s.strip() for s in sub_split_chunks):
                             self.logger.warning(f"LLM boundary splitting yielded no valid sub-chunks for segment {i+1}.")
-                            sub_split_chunks = None
+                            sub_split_chunks = None 
                         else:
                             self.logger.info(f"LLM boundary splitting for segment {i+1} yielded {len(sub_split_chunks)} sub-chunks.")
-                    except Exception as e2:
-                        self.logger.warning(f"LLM boundary splitting failed for segment {i+1}: {e2}. Falling back to RecursiveCharacterTextSplitter.")
+                    except Exception as e1:
+                        self.logger.warning(f"LLM boundary splitting failed for segment {i+1}: {e1}. Trying semantic boundaries.")
                         sub_split_chunks = None
                 
                 # 2c. 如果 LLM 辅助切分均失败，使用 RecursiveCharacterTextSplitter
                 if sub_split_chunks is None:
                     self.logger.info(f"Falling back to RecursiveCharacterTextSplitter for oversized segment {i+1}.")
-                    char_chunk_size = int(self.max_chunk_tokens * self.chars_per_token_estimate)
-                    char_chunk_size = max(100, char_chunk_size) # 确保 chunk_size 为正且不太小
+                    # char_chunk_size = int(self.max_chunk_tokens * self.chars_per_token_estimate)
+                    # char_chunk_size = max(100, char_chunk_size) # 确保 chunk_size 为正且不太小
                     
                     r_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=char_chunk_size,
+                        chunk_size=self.max_chunk_tokens,
                         chunk_overlap=self.char_overlap_fallback,
-                        length_function=len,
+                        length_function=self._count_tokens,
                         separators=["\n\n", "\n", ". ", " ", ""] # 标准分隔符
                     )
                     sub_split_chunks = r_splitter.split_text(chunk_text)
@@ -242,12 +238,14 @@ class HybridSplitter:
         
         metadata = {
             "book_title": self.book_title,
+            "total_tokens": self.total_tokens,
             "total_chunks": len(self.final_chunks),
             "max_chunk_tokens": self.max_chunk_tokens,
             "llm_splitter_max_llm_tokens": self.llm_splitter_max_llm_tokens,
             "llm_splitter_chunk_overlap": self.llm_splitter_chunk_overlap,
             "llm_splitter_max_retries": self.llm_splitter_max_retries,
             "llm_splitter_retry_delay": self.llm_splitter_retry_delay,
+            "llm_splitter_max_chunk_tokens_for_merge": self.llm_splitter_max_chunk_tokens_for_merge,
             "llm_splitter_min_chunk_tokens_for_merge": self.llm_splitter_min_chunk_tokens_for_merge,
             "char_overlap_fallback": self.char_overlap_fallback,
             "chars_per_token_estimate": self.chars_per_token_estimate
