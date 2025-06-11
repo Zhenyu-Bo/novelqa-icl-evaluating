@@ -455,10 +455,10 @@ class LLMSplitter():
         
         if self.tokens_num > max_llm_tokens:
             text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.max_llm_tokens,  # 留出一些空间给提示词和回复
-            chunk_overlap=self.chunk_overlap,
-            length_function=self._count_tokens
-        )
+                chunk_size=self.max_llm_tokens,  # 留出一些空间给提示词和回复
+                chunk_overlap=self.chunk_overlap,
+                length_function=self._count_tokens
+            )
             self.initial_chunks = text_splitter.split_text(book_content)
             # self.initial_chunks = [LLMSplitter._normalize_text(chunk) for chunk in self.initial_chunks if chunk.strip()]
             print(f"Initial chunks number: {len(self.initial_chunks)}")
@@ -654,7 +654,7 @@ class LLMSplitter():
             
             # 根据边界在原文中切分
             boundaries = result["boundaries"]
-            chunks = self._split_by_boundaries(self.book_content, boundaries)
+            self.chunks = self._split_by_boundaries(self.book_content, boundaries)
             
             # 执行小块合并
             self._merge_small_consecutive_chunks()
@@ -711,7 +711,7 @@ class LLMSplitter():
         print(f"Initial chunks number: {len(boundaries)}")
         print(f"Final chunks number: {len(chunks)}")
         
-        self.chunks = chunks
+        # self.chunks = chunks
         return chunks
     
     def _process_long_document_directly(self) -> list[str]:
@@ -787,7 +787,7 @@ class LLMSplitter():
                 continue
         
         # 根据所有收集到的边界切分原始文本
-        chunks = self._split_by_boundaries(self.book_content, all_boundaries)
+        self.chunks = self._split_by_boundaries(self.book_content, all_boundaries)
         
         # 执行小块合并
         self._merge_small_consecutive_chunks()
@@ -894,7 +894,7 @@ class LLMSplitter():
                 boundaries = self._extract_boundaries_from_titles(chapter_data)
                 print(f"LLM returned {len(chapter_data)} total chapter titles")
                 print(f"Using {len(boundaries)} titles as boundaries")
-                chunks = self._split_by_boundaries(self.book_content, boundaries)
+                self.chunks = self._split_by_boundaries(self.book_content, boundaries)
                 
                 # 执行小块合并
                 self._merge_small_consecutive_chunks()
@@ -1129,7 +1129,7 @@ class LLMSplitter():
             return self.generate_chunks_by_boundaries()
         
         # 根据分块边界切分原始文本
-        chunks = self._split_by_boundaries(self.book_content, boundaries)
+        self.chunks = self._split_by_boundaries(self.book_content, boundaries)
         
         # 执行小块合并
         self._merge_small_consecutive_chunks()
@@ -1205,7 +1205,7 @@ class LLMSplitter():
         """递归分割文本"""
         if not text or not text.strip():
             return
-        
+        text = LLMSplitter._normalize_text(text)  # 确保文本经过标准化处理
         if self._count_tokens(text) <= self.max_llm_tokens:
             front_text = text
         else:        
@@ -1222,12 +1222,29 @@ class LLMSplitter():
                     boundaries = self._extract_boundaries_from_titles(chapter_titles)
                     chunks = self._split_by_boundaries(text, boundaries)
                 if chunks:
+                    print(f"Successfully split text into {len(chunks)} chunks using LLM response.")
                     self.chunks.extend(chunks)
                     last_chunk = chunks[-1]
-                    if self._count_tokens(last_chunk) <= self.max_chunk_tokens:
+                    if self._count_tokens(last_chunk) <= self.chunk_tokens:
+                        # 如果最后一个大块小于等于 max_chunk_tokens ，则已经处理完成
+                        self._merge_small_consecutive_chunks()
+                        return
+                    elif len(chunks) == 1:
+                        # 如果只有一个大块，说明切分失败，直接使用 RecursiveCharacterTextSplitter 进行分割
+                        self.chunks.pop()
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=self.chunk_tokens,
+                            chunk_overlap=self.chunk_overlap,
+                            length_function=self._count_tokens
+                        )
+                        chunks = text_splitter.split_text(text)
+                        self.chunks.extend(chunks)
+                        self._merge_small_consecutive_chunks()
                         return
                     else:
+                        print(f"Last chunk is too large ({self._count_tokens(last_chunk)} tokens), continuing recursive splitting.")
                         self.chunks.pop()  # 移除最后一个大块，继续递归分割
+                        print(f"Now have {len(self.chunks)} chunks, continuing recursive splitting.")
                         self._split_recursive(last_chunk)
                 else:
                     raise ValueError("No chunks generated from LLM response")
@@ -1236,7 +1253,7 @@ class LLMSplitter():
                 print(f"Error during recursive splitting: {e}, retrying...")
                 continue
         print("Reached maximum retries for recursive splitting, no valid chunks generated, treat total text as a single chunk.")
-        self.chunks.append(text)  # 如果所有尝试都失败，作为一个整体块返回
+        self.chunks.append(text)  # 如果所有尝试都失败，作为一个整体块加入到 self.chunks 中
         return
             
     
