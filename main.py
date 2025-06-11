@@ -46,11 +46,13 @@ def build_zero_shot_prompt(book_discription: str, question_options: str) -> str:
 def build_zero_shot_only_title(book_title: str, question_options: str) -> str:
     return f"""You are a literature professor. I will provide you a series of questions along with four choices for each question. Please accurately select the correct choice to each of the following questions. All the questions are related to a book and can be answered by the book content. The title of the book is: {book_title}\nQuestions start here:\n{question_options}\nQuestions end here.\nTry your best to answer the questions based on your own knowledge. You should first analyze the question and the book and then give your choise. Your should output the choice to each question with the format Your output format should be <First Question ID>: \n<analysis of text content around the question>\nAnswer: <best option>\n\n<Second Question ID>:\n<analysis of text content around the question>\nAnswer: <best option> ... <nth Question ID>:...\nFor example, the output may be like this:\nQ0001:\nBased on the document and the question,...\nAnswer: A\n\nQ0002:\nBased on the document and the question,...\nAnswer: B\n\nQ000n:\nBase on the document and the question,...\nAnswer: C\n\nOne more thing, don't use the markdown output format."""
 
-BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
-BOOK_IDS.remove("B06")
-BOOK_IDS.remove("B30")
-BOOK_IDS.remove("B45")
-BOOK_IDS.remove("B48") # 内容太长，予以舍弃
+# BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
+BOOK_IDS = ["B44"]
+test_question_id = "Q0368"
+# BOOK_IDS.remove("B06")
+# BOOK_IDS.remove("B30")
+# BOOK_IDS.remove("B45")
+# BOOK_IDS.remove("B48") # 内容太长，予以舍弃
 
 def test(book_id: str, llm: LLM) -> dict:
     """对一本书进行测试"""
@@ -78,7 +80,12 @@ def test(book_id: str, llm: LLM) -> dict:
         # 使用以下的代码，每次向模型传入所有的问题
         end_iter = len(question_loader)
         print(f"Processing {book_id} from {question_iter} to {end_iter}")
-        questions = "".join([f"{question.get_question_options()}\n" for question in question_loader[question_iter:end_iter]])
+        if book_id not in BOOK_IDS:
+            break
+        question = question_loader.get_by_id(test_question_id)
+        questions = question.get_question_options()
+        print(questions)
+        # questions = "".join([f"{question.get_question_options()}\n" for question in question_loader[question_iter:end_iter]])
         question_iter = end_iter
         if use_content:
             prompt = build_prompt_icl(book_content, questions)
@@ -91,6 +98,7 @@ def test(book_id: str, llm: LLM) -> dict:
             file.write(prompt)
         # 调用模型
         response = llm.generate(prompt)
+        print(response)
         with open(f"{output_dir}/responses/{book_id}.txt", 'w', encoding='utf-8') as file:
             file.write(response)
         # 解析输出

@@ -3,6 +3,7 @@ from src.llm import LLM, get_llm
 from src.path_builder import NovelQAPathBuilder
 from src.loader import BookLoader, QuestionLoader, BookMetaDataLoader
 from src.chapterizer import Chapterizer
+from src.splitter import HybridSplitter
 from src.extractor import extract_option
 from src.prompt import build_transform_question_prompt, build_prompt_icl, build_prompt_final, build_prompt_icl2, build_prompt_icl_json, build_prompt_final_json
 import unicodedata
@@ -25,15 +26,24 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--book_id", type=str, default="all")
 parser.add_argument("--question_id", type=str, default="all")
 parser.add_argument("--max_workers", type=int, default=8, help="Number of worker processes to use")
-parser.add_argument("--use_cache", type=bool, default=True, help="Whether to use cache for chapter contents")
-parser.add_argument("--cache_dir", type=str, default="./cache/chapters", help="Directory to store cache files")
-parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/prompt8", help="Directory to store output files")
+parser.add_argument("--use_cache", type=int, default=1, help="Whether to use cache for chapter contents")
+parser.add_argument("--cache_dir", type=str, default="./cache/chunks", help="Directory to store cache files")
+parser.add_argument("--output_dir", type=str, default="./outputs/reduce/selected/hybrid", help="Directory to store output files")
 parser.add_argument("--skip_answered", action="store_true", help="Skip already answered questions")
 parser.add_argument("--no_skip_answered", action="store_false", dest="skip_answered", help="Do not skip already answered questions")
+# HybridSplitter 相关参数
+parser.add_argument("--max_chunk_tokens", type=int, default=50000, help="Maximum tokens per chunk")
+parser.add_argument("--max_llm_tokens", type=int, default=100000, help="Maximum tokens for LLM processing")
+parser.add_argument("--chunk_overlap", type=int, default=100, help="Chunk overlap for LLM splitter")
+parser.add_argument("--max_retries", type=int, default=5, help="Maximum retries for LLM splitter")
+parser.add_argument("--retry_delay", type=float, default=1.0, help="Retry delay for LLM splitter")
+parser.add_argument("--max_chunk_tokens_for_merge", type=int, default=20000, help="Maximum tokens for chunk merging")
+parser.add_argument("--min_chunk_tokens_for_merge", type=int, default=50, help="Minimum tokens for chunk merging")
+parser.add_argument("--char_overlap_fallback", type=int, default=50, help="Character overlap for fallback splitter")
+parser.add_argument("--chars_per_token_estimate", type=float, default=3.5, help="Estimated characters per token")
 parser.set_defaults(skip_answered=True)  # 默认值为 True
 args = parser.parse_args()
 skip_answered = args.skip_answered
-
 
 NOVELQA_PATH = '../NovelQA'
 path_builder = NovelQAPathBuilder(NOVELQA_PATH)
@@ -78,18 +88,14 @@ logging.basicConfig(
 
 
 def question_transform(question: str, llm: LLM) -> str:
-    # prompt: str = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel. However, the novel is too long, so I will give the novel chapter by chapter, and you need to transform the question for each chapter. You should make sure the user will be able to get the answer of the original question with only the answers of the transformed quesions for each chapter. Your output should only include the transformed question, and the transformed question should be wrapped in two special tokens: <answer>, </answer>. For example, if the question is '<answer>How many times has Alice mentioned in the novel?', the transformed question may be 'Is Alice mentioned in this chapter? If so, how many times has Alice mentioned in this chapter?</answer>', if the question is 'Which chapter mentions Alice.', the transformed question may be '<answer>Is Alice mentioned in this chapter?</answer>', if the question is 'When Jane Eyre met Mr. Lloyd for the first time, what's her feeling towards him?', the transformed question should be '<answer>If Jane Eyre met Mr. Lloyd in this chapter? If so, what's her feeling towards him in the first meeting?</answer>'. You should give only one best transformed question, and not output anything else.\nThe given question is {question}."""
     prompt = build_transform_question_prompt(question)
-    # print("Original question:", question)
     response = llm.generate(prompt)
-    # print("Response:", response)
     match = re.search(r'<answer>(.*?)</answer>', response)
     if match:
         transformed_question = match.group(1)
     else:
         print(f"Warning: No <answer> tags found in response for question: {question}")
         transformed_question = response.replace("<answer>", "").replace("</answer>", "")
-    # transformed_question = response.replace("<answer>", "").replace("</answer>", "")
     print("Transformed question:", transformed_question)
     return transformed_question
 
@@ -98,22 +104,55 @@ def remove_invisible_chars(s):
     return ''.join(c for c in s if unicodedata.category(c) not in ('Cc', 'Cf'))
 
 
-def get_chapter_contents_cached(chapterizer, book_id: str, use_cache: bool = True, cache_dir: str = './cache') -> tuple:
+def get_chunks_cached(book_content: str, book_title: str, book_id: str, llm: LLM, use_cache: bool = True, cache_dir: str = './cache/chunks') -> list:
     """
-    检查缓存文件是否存在，若存在则直接读取 chapterizer 的结构数据，否则调用 chapterizer.get_chapter_contents() 并保存到文件中
+    使用 HybridSplitter 获取分块，支持缓存
     """
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f"{book_id}_chapters.json")
+    cache_file = os.path.join(cache_dir, f"{book_id}_chunks.json")
+    
     if os.path.exists(cache_file) and use_cache:
+        print(f"Loading cached chunks for book {book_id}")
         with open(cache_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        structure_dict = data.get("structure_dict")
-        titles = data.get("titles")
+        chunks = data.get("chunks", [])
+        metadata = data.get("metadata", {})
+        print(f"Loaded {len(chunks)} cached chunks for book {book_id}")
     else:
-        structure_dict, titles = chapterizer.get_chapter_contents()
+        print(f"Generating chunks for book {book_id} using HybridSplitter")
+        # 创建 HybridSplitter 实例
+        hybrid_splitter = HybridSplitter(
+            book_content=book_content,
+            llm=llm,
+            book_title=book_title,
+            max_chunk_tokens=args.max_chunk_tokens,
+            llm_splitter_max_llm_tokens=args.max_llm_tokens,
+            llm_splitter_chunk_overlap=args.chunk_overlap,
+            llm_splitter_max_retries=args.max_retries,
+            llm_splitter_retry_delay=args.retry_delay,
+            llm_splitter_max_chunk_tokens_for_merge=args.max_chunk_tokens_for_merge,
+            llm_splitter_min_chunk_tokens_for_merge=args.min_chunk_tokens_for_merge,
+            char_overlap_fallback=args.char_overlap_fallback,
+            chars_per_token_estimate=args.chars_per_token_estimate
+        )
+        
+        # 执行分块
+        chunks = hybrid_splitter.split()
+        metadata = hybrid_splitter.get_metadata()
+        
+        print(f"Generated {len(chunks)} chunks for book {book_id}")
+        
+        # 保存到缓存
+        cache_data = {
+            "book_id": book_id,
+            "metadata": metadata,
+            "chunks": chunks,
+        }
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({"structure_dict": structure_dict, "titles": titles}, f, ensure_ascii=False, indent=4)
-    return structure_dict, titles
+            json.dump(cache_data, f, ensure_ascii=False, indent=4)
+        print(f"Cached chunks saved to {cache_file}")
+    
+    return chunks
 
 
 def is_answered(book_id: str, question_id: str, output_dir: str = './outputs/reduce/selected') -> bool:
@@ -126,7 +165,7 @@ def is_answered(book_id: str, question_id: str, output_dir: str = './outputs/red
     return False
 
 
-def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = './outputs/reduce', use_cache: bool = True, cache_dir: str = './cache') -> dict:
+def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir: str = './outputs/reduce', use_cache: bool = True, cache_dir: str = './cache') -> dict:
     print(f"Processing book {book_id}")
     book_path = path_builder.get_book_path(book_id)
     book_loader = BookLoader(book_path, book_id)
@@ -140,6 +179,10 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
     meta_data_loader.load()
     book_title = meta_data_loader.get_title(book_id)
     question_dict = question_loader.get_whole()
+    
+    # 使用 HybridSplitter 获取分块（支持缓存）
+    chunks = get_chunks_cached(book_content, book_title, book_id, llm, use_cache=use_cache, cache_dir=cache_dir)
+    
     for question_id, question in tqdm(question_dict.items(), desc=f"Processing questions for book {book_id}\n"):
         if test_question_id != 'all' and question_id != test_question_id:
             continue
@@ -154,40 +197,40 @@ def reduce_test(book_id: str, test_question_id: str, llm: LLM, output_dir:str = 
             if question.get_aspect() not in test_aspects and question.get_complexity() not in test_complexity:
                 print(f"Skipping question {question_id}, aspect: {question.get_aspect()}, complexity: {question.get_complexity()}\n")
                 continue
-        print(f"{question_id}: {question.get_question_options()}")
-        transformed_question = question_transform(question.get_question_str(), llm)
-        chapterizer = Chapterizer(book_content, book_title)
-        prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chapter of the novel. You need to give the answer to the question based on the given answers. The following are the answers to the transformed question for each chapter. """
-        structure_dict, titles = get_chapter_contents_cached(chapterizer, book_id, use_cache=use_cache, cache_dir=cache_dir)  # 使用缓存函数获取章节结构数据
-        chapter_answers = []
-        i = 1
-        for title in tqdm(titles, desc=f"Processing chapters for {book_id}", leave=False):
-            title_desc = title.split('_')[-1]
-            for t in title.split('_')[:-1]:
-                title_desc +=' of '+ t
-            # print(title_desc)
-            content = structure_dict[title]
-            prompt_chapter = build_prompt_icl(content, transformed_question)
-            answer_chapter = llm.generate(prompt_chapter)
-            # print(answer_chapter)
-            # prompt_final += f"""The answer to chapter {title_desc} is: {answer_chapter}.\n"""
-            # chapter_answers.append(f"The answer to the chapter {title_desc} is {answer_chapter}. ")
-            prompt_final += f"""The answer to chunk {i} is: {answer_chapter}.\n"""
-            chapter_answers.append(f"The answer to the chunk {i} is {answer_chapter}. ")
-            i += 1
         
-        # print(prompt_final)
+        logging.info(f"{question_id}: {question.get_question_options()}")
+        transformed_question = question_transform(question.get_question_str(), llm)
+        
+        prompt_final = f"""You are a helpful assistant. I will give you a question, which is relevant to a novel, and a series of answers. The answers are to the question {transformed_question} for each chunk of the novel. You need to give the answer to the question based on the given answers. The following are the answers to the transformed question for each chunk. """
+        
+        chunk_answers = []
+        
+        # 处理每个分块
+        for i, chunk_content in enumerate(tqdm(chunks, desc=f"Processing chunks for {book_id}", leave=False), 1):
+            if not chunk_content or not chunk_content.strip():
+                continue
+                
+            # 为每个分块生成答案
+            prompt_chunk = build_prompt_icl(chunk_content, transformed_question)
+            answer_chunk = llm.generate(prompt_chunk)
+            
+            prompt_final += f"""The answer to chunk {i} is: {answer_chunk}.\n"""
+            chunk_answers.append(f"The answer to the chunk {i} is {answer_chunk}. ")
+        
+        # 生成最终答案
         prompt_final += build_prompt_final(question.get_question_options())
         answer_final = llm.generate(prompt_final)
-        # print(answer_final)
         llm_option = extract_option(answer_final)
         is_correct = question.get_answer() == llm_option
         
+        # 保存结果
         question_dict[question_id]["ModelAnswer"] = llm_option
         question_dict[question_id]["Correct"] = is_correct
         question_dict[question_id]["Analysis"] = answer_final
-        question_dict[question_id]["ChapterAnswers"] = chapter_answers
+        question_dict[question_id]["ChunkAnswers"] = chunk_answers  # 改名为 ChunkAnswers
         question_dict[question_id]["TransformedQuestion"] = transformed_question
+        question_dict[question_id]["TotalChunks"] = len(chunks)  # 添加分块总数信息
+        
         print(f"Question {question_id} - Correct Answer: {question.get_answer()} - Model Answer: {llm_option}, Correct: {is_correct}")
         prompt_final = ""
         save_results_by_question(question_dict, book_id, question_id, output_dir=output_dir)
@@ -242,19 +285,13 @@ def process_book(book_id: str, question_id: str, model_name: str = 'gemini', out
 
 
 if __name__ == "__main__":
-    # output_dir = "./outputs/reduce"
     output_dir = args.output_dir
     use_cache = args.use_cache
     cache_dir = args.cache_dir
     os.makedirs(output_dir, exist_ok=True)
     if use_cache:
         os.makedirs(cache_dir, exist_ok=True)
-    # # BOOK_IDS = [f"B{i:02}" for i in range(0, 63)]
-    # for book_id in tqdm(BOOK_IDS, desc="Processing books"):
-    #     if args.book_id != 'all' and book_id != args.book_id:
-    #         continue
-    #     results = reduce_test(book_id, args.question_id, llm, output_dir=output_dir, use_cache=use_cache, cache_dir=cache_dir)
-        # save_results(results, book_id, output_dir=output_dir)
+    
     # 设置多进程池
     max_workers = min(len(BOOK_IDS), args.max_workers)  # 使用 CPU 核心数或书本数中的较小值
     with ProcessPoolExecutor(max_workers=max_workers) as executor:

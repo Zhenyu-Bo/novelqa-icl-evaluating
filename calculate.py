@@ -44,6 +44,8 @@ for file in sorted(os.listdir(base_dir)):
                         continue
                 if 'Correct' not in d:
                     continue
+                if d['ModelAnswer'] == 'ERROR':
+                    continue
                 # if 'TransformedQuestion' in d:
                 #     if d['TransformedQuestion'].lower() == "the transformed question" or d['TransformedQuestion'].lower() == "transformed question":
                 #         # print(f"File: {file}, Question: {d['Question']}")
@@ -88,8 +90,11 @@ for complexity in complexity_correct:
     )
 if sum_total != 0:
     print(f"Overall Accuracy: {sum_correct / sum_total * 100:.2f}%({sum_correct}/{sum_total})")
+    if aspect_total.get("times", 0) > 0 and aspect_correct.get("times", 0) > 0:
+        print(f"Except 'times' Aspect: {(sum_correct  - aspect_correct['times']) / (sum_total - aspect_total['times']) * 100:.2f}%({sum_correct - aspect_correct['times']}/{sum_total - aspect_total['times']})")
 else:
     print("No data found.")
     sum_correct = 0
     sum_total = 0
     print("Overall Accuracy: 0.00%(0/0)")
+    
