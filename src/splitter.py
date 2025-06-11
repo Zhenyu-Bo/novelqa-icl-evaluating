@@ -202,6 +202,10 @@ class HybridSplitter:
 
     def save_chunks_to_json(self, output_path: str) -> None:
         """将最终的分块列表保存为 JSON 文件。"""
+        output_path = output_path.strip()
+        if not output_path:
+            self.logger.error("Output path is empty. Failed to save chunks.")
+            return
         if not self.final_chunks:
             self.logger.error("No chunks to save. Run split() method first.")
             # Consider raising an error or just returning if no chunks
@@ -236,6 +240,7 @@ class HybridSplitter:
             self.logger.error(f"An unexpected error occurred while saving chunks to {output_path}: {e}")
             raise
         
+    def get_metadata(self) -> Dict[str, any]:
         metadata = {
             "book_title": self.book_title,
             "total_tokens": self.total_tokens,
