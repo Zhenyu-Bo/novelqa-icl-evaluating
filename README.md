@@ -15,11 +15,6 @@ novelqa-icl-evaluating/
 │   ├── prompt.py              # 提示词构建
 │   ├── splitter.py            # 文本分割器
 │   └── utils.py               # 通用工具函数
-├── cache/                     # 缓存目录
-│   ├── chapters/              # 章节缓存
-│   └── chunks/                # 分块缓存
-├── outputs/                   # 输出结果目录
-│   └── reduce/                # 处理结果
 ├── .env                       # 环境变量配置（API密钥等）
 └── requirements.txt           # 项目依赖
 ```
