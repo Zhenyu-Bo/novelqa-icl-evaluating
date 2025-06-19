@@ -14,13 +14,7 @@ import logging
 from dotenv import load_dotenv
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
-import inflect
 import re
-
-os.environ['http_proxy'] = 'http://127.0.0.1:7897'
-os.environ['https_proxy'] = 'http://127.0.0.1:7897'
-os.environ['all_proxy'] = 'socks5://127.0.0.1:7897'
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--book_id", type=str, default="all")

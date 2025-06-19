@@ -3,3 +3,4 @@ cache/
 outputs/
 src/__pycache__/
 error.log
+test/

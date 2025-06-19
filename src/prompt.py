@@ -28,7 +28,7 @@ def build_transform_question_prompt(question: str) -> str:
     return prompt
 
 
-def build_prompt_icl(chapter_content: str, question_options: str) -> str:
+def build_prompt_icl(chapter_content: str, question: str) -> str:
     """创建提示词
     基本的思路是，让模型分析问题，给出回答和对应的证据
     """
@@ -63,7 +63,7 @@ def build_prompt_icl(chapter_content: str, question_options: str) -> str:
     {chapter_content}
 
     Here is the question:
-    {question_options}
+    {question}
 
     Now provide your answer.
     """
@@ -182,7 +182,7 @@ def build_transform_question_prompt2(question: str) -> str:
     return prompt
 
 
-def build_prompt_icl2(chapter_content: str, question_options: str) -> str:
+def build_prompt_icl2(chapter_content: str, question: str) -> str:
     """
     创建提示词，要求模型分析问题，找出所有显然相关的证据，避免过度解读，对于次数类问题不需要回答次数，同一事件多次出现视为一次。
     """
@@ -212,7 +212,7 @@ def build_prompt_icl2(chapter_content: str, question_options: str) -> str:
     {chapter_content}
 
     Here is the question:
-    {question_options}
+    {question}
 
     Now provide your answer.
     """
@@ -220,7 +220,7 @@ def build_prompt_icl2(chapter_content: str, question_options: str) -> str:
     return prompt
 
 
-def build_prompt_icl_json(chapter_content: str, question_options: str) -> str:
+def build_prompt_icl_json(chapter_content: str, question: str) -> str:
     prompt = f"""
     You are a literature professor specializing in analyzing novels. I will provide you with the full text of a chapter from a novel and a question. Your task is to thoroughly analyze the chapter's content and provide an accurate and well-supported answer to the question.
 
@@ -260,7 +260,7 @@ def build_prompt_icl_json(chapter_content: str, question_options: str) -> str:
     {chapter_content}
 
     Here is the question:
-    {question_options}
+    {question}
 
     Now provide your answer in the specified JSON format.
     """

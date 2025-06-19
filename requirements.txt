@@ -1,3 +1,11 @@
+# LLM APIs
 google-genai
 openai
-inflect
+
+# Text Processing
+tiktoken
+langchain
+
+# Utilities
+tqdm
+python-dotenv

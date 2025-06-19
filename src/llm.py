@@ -46,7 +46,7 @@ class Deepseek(LLM):
         self.client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
         self.reason = reason
 
-    def generate(self, prompt: str, stream_internally_log: bool = False) -> str:
+    def generate(self, prompt: str) -> str:
         if self.reason:
             response = self.client.chat.completions.create(
                 model="deepseek-reasoner",
